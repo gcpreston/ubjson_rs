@@ -295,7 +295,6 @@ fn test_container_error_conditions() {
     let mut data = vec![b'{']; // Object start
     
     // First "name" key
-    data.push(b'S');
     data.push(b'U');
     data.push(4); // length
     data.extend_from_slice(b"name");
@@ -305,7 +304,6 @@ fn test_container_error_conditions() {
     data.extend_from_slice(b"John");
     
     // Second "name" key (duplicate)
-    data.push(b'S');
     data.push(b'U');
     data.push(4); // length
     data.extend_from_slice(b"name");
@@ -321,10 +319,10 @@ fn test_container_error_conditions() {
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), UbjsonError::InvalidFormat(_)));
 
-    // Test object with non-string key
+    // Test object with invalid length marker for key
     let data = vec![
         b'{',           // Object start
-        b'i', 42,       // int8(42) as key (invalid)
+        b'T',           // Invalid length marker (true boolean, not a valid length type)
         b'S', b'U', 5, b'v', b'a', b'l', b'u', b'e', // "value"
         b'}',           // Object end
     ];
@@ -361,7 +359,6 @@ fn test_container_depth_limits() {
     // Create nested objects: {"a": {"b": {"c": {"d": {"e": null}}}}}
     for i in 0..depth {
         data.push(b'{');
-        data.push(b'S');
         data.push(b'U');
         data.push(1); // key length
         data.push(b'a' + i as u8); // key: "a", "b", "c", etc.
@@ -400,7 +397,6 @@ fn test_container_size_limits() {
     let size_limit = 2;
     for i in 0..size_limit + 1 {
         // Key
-        data.push(b'S');
         data.push(b'U');
         data.push(4); // length
         data.extend_from_slice(b"key");
@@ -423,8 +419,7 @@ fn test_complex_nested_containers() {
     // Test complex nested structure: {"users": [{"name": "John", "scores": [95, 87]}, {"name": "Jane", "scores": []}]}
     let mut data = vec![b'{']; // Root object start
     
-    // Key "users"
-    data.push(b'S');
+    // Key "users" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(5); // length
     data.extend_from_slice(b"users");
@@ -435,8 +430,7 @@ fn test_complex_nested_containers() {
     // First user object
     data.push(b'{'); // User object start
     
-    // Key "name"
-    data.push(b'S');
+    // Key "name" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(4); // length
     data.extend_from_slice(b"name");
@@ -446,8 +440,7 @@ fn test_complex_nested_containers() {
     data.push(4); // length
     data.extend_from_slice(b"John");
     
-    // Key "scores"
-    data.push(b'S');
+    // Key "scores" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(6); // length
     data.extend_from_slice(b"scores");
@@ -462,8 +455,7 @@ fn test_complex_nested_containers() {
     // Second user object
     data.push(b'{'); // User object start
     
-    // Key "name"
-    data.push(b'S');
+    // Key "name" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(4); // length
     data.extend_from_slice(b"name");
@@ -473,8 +465,7 @@ fn test_complex_nested_containers() {
     data.push(4); // length
     data.extend_from_slice(b"Jane");
     
-    // Key "scores"
-    data.push(b'S');
+    // Key "scores" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(6); // length
     data.extend_from_slice(b"scores");
@@ -606,8 +597,7 @@ fn test_deserialize_object_level_1_simple() {
     // {"type": 3}
     let data = vec![
         b'{',           // Object start
-        b'S',           // String type marker for key
-        b'U', 4,        // Length: uint8(4) for "type"
+        b'U', 4,        // Length: uint8(4) for "type" (no 'S' marker for keys per UBJSON spec)
         b't', b'y', b'p', b'e',  // Key: "type"
         b'U', 3,        // Value: uint8(3)
         b'}',           // Object end
@@ -627,8 +617,7 @@ fn test_deserialize_object_level_2_multiple_primitives() {
     // {"id": 42, "name": "Alice", "active": true, "score": 95.5}
     let mut data = vec![b'{']; // Object start
     
-    // Key "id"
-    data.push(b'S');
+    // Key "id" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(2); // length
     data.extend_from_slice(b"id");
@@ -637,7 +626,6 @@ fn test_deserialize_object_level_2_multiple_primitives() {
     data.push(42);
     
     // Key "name"
-    data.push(b'S');
     data.push(b'U');
     data.push(4); // length
     data.extend_from_slice(b"name");
@@ -648,7 +636,6 @@ fn test_deserialize_object_level_2_multiple_primitives() {
     data.extend_from_slice(b"Alice");
     
     // Key "active"
-    data.push(b'S');
     data.push(b'U');
     data.push(6); // length
     data.extend_from_slice(b"active");
@@ -656,7 +643,6 @@ fn test_deserialize_object_level_2_multiple_primitives() {
     data.push(b'T');
     
     // Key "score"
-    data.push(b'S');
     data.push(b'U');
     data.push(5); // length
     data.extend_from_slice(b"score");
@@ -684,8 +670,7 @@ fn test_deserialize_object_level_3_with_arrays() {
     // {"tags": ["rust", "json"], "numbers": [1, 2, 3], "empty": []}
     let mut data = vec![b'{']; // Object start
     
-    // Key "tags"
-    data.push(b'S');
+    // Key "tags" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(4); // length
     data.extend_from_slice(b"tags");
@@ -695,8 +680,7 @@ fn test_deserialize_object_level_3_with_arrays() {
     data.push(b'S'); data.push(b'U'); data.push(4); data.extend_from_slice(b"json");
     data.push(b']'); // Array end
     
-    // Key "numbers"
-    data.push(b'S');
+    // Key "numbers" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(7); // length
     data.extend_from_slice(b"numbers");
@@ -707,8 +691,7 @@ fn test_deserialize_object_level_3_with_arrays() {
     data.push(b'i'); data.push(3);
     data.push(b']'); // Array end
     
-    // Key "empty"
-    data.push(b'S');
+    // Key "empty" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(5); // length
     data.extend_from_slice(b"empty");
@@ -742,16 +725,14 @@ fn test_deserialize_object_level_4_nested_objects() {
     // {"user": {"name": "Bob", "age": 30}, "config": {"debug": false}}
     let mut data = vec![b'{']; // Root object start
     
-    // Key "user"
-    data.push(b'S');
+    // Key "user" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(4); // length
     data.extend_from_slice(b"user");
     // Value: nested object
     data.push(b'{'); // Nested object start
     
-    // Key "name"
-    data.push(b'S');
+    // Key "name" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(4); // length
     data.extend_from_slice(b"name");
@@ -761,8 +742,7 @@ fn test_deserialize_object_level_4_nested_objects() {
     data.push(3); // length
     data.extend_from_slice(b"Bob");
     
-    // Key "age"
-    data.push(b'S');
+    // Key "age" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(3); // length
     data.extend_from_slice(b"age");
@@ -772,16 +752,14 @@ fn test_deserialize_object_level_4_nested_objects() {
     
     data.push(b'}'); // Nested object end
     
-    // Key "config"
-    data.push(b'S');
+    // Key "config" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(6); // length
     data.extend_from_slice(b"config");
     // Value: nested object
     data.push(b'{'); // Nested object start
     
-    // Key "debug"
-    data.push(b'S');
+    // Key "debug" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(5); // length
     data.extend_from_slice(b"debug");
@@ -818,16 +796,14 @@ fn test_deserialize_object_level_5_mixed_complex() {
     // }
     let mut data = vec![b'{']; // Root object start
     
-    // Key "metadata"
-    data.push(b'S');
+    // Key "metadata" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(8); // length
     data.extend_from_slice(b"metadata");
     // Value: nested object
     data.push(b'{'); // Metadata object start
     
-    // Key "version"
-    data.push(b'S');
+    // Key "version" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(7); // length
     data.extend_from_slice(b"version");
@@ -837,8 +813,7 @@ fn test_deserialize_object_level_5_mixed_complex() {
     data.push(3); // length
     data.extend_from_slice(b"1.0");
     
-    // Key "author"
-    data.push(b'S');
+    // Key "author" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(6); // length
     data.extend_from_slice(b"author");
@@ -850,8 +825,7 @@ fn test_deserialize_object_level_5_mixed_complex() {
     
     data.push(b'}'); // Metadata object end
     
-    // Key "data"
-    data.push(b'S');
+    // Key "data" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(4); // length
     data.extend_from_slice(b"data");
@@ -861,8 +835,7 @@ fn test_deserialize_object_level_5_mixed_complex() {
     // First data object
     data.push(b'{'); // Object start
     
-    // Key "id"
-    data.push(b'S');
+    // Key "id" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(2); // length
     data.extend_from_slice(b"id");
@@ -870,8 +843,7 @@ fn test_deserialize_object_level_5_mixed_complex() {
     data.push(b'i');
     data.push(1);
     
-    // Key "values"
-    data.push(b'S');
+    // Key "values" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(6); // length
     data.extend_from_slice(b"values");
@@ -886,8 +858,7 @@ fn test_deserialize_object_level_5_mixed_complex() {
     // Second data object
     data.push(b'{'); // Object start
     
-    // Key "id"
-    data.push(b'S');
+    // Key "id" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(2); // length
     data.extend_from_slice(b"id");
@@ -895,8 +866,7 @@ fn test_deserialize_object_level_5_mixed_complex() {
     data.push(b'i');
     data.push(2);
     
-    // Key "values"
-    data.push(b'S');
+    // Key "values" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(6); // length
     data.extend_from_slice(b"values");
@@ -907,24 +877,21 @@ fn test_deserialize_object_level_5_mixed_complex() {
     data.push(b'}'); // Second data object end
     data.push(b']'); // Data array end
     
-    // Key "settings"
-    data.push(b'S');
+    // Key "settings" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(8); // length
     data.extend_from_slice(b"settings");
     // Value: nested object
     data.push(b'{'); // Settings object start
     
-    // Key "enabled"
-    data.push(b'S');
+    // Key "enabled" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(7); // length
     data.extend_from_slice(b"enabled");
     // Value true
     data.push(b'T');
     
-    // Key "threshold"
-    data.push(b'S');
+    // Key "threshold" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(9); // length
     data.extend_from_slice(b"threshold");
@@ -975,32 +942,28 @@ fn test_deserialize_object_level_6_deeply_nested() {
     // {"level1": {"level2": {"level3": {"level4": "deep_value"}}}}
     let mut data = vec![b'{']; // Root object start
     
-    // Key "level1"
-    data.push(b'S');
+    // Key "level1" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(6); // length
     data.extend_from_slice(b"level1");
     // Value: nested object
     data.push(b'{'); // Level 1 object start
     
-    // Key "level2"
-    data.push(b'S');
+    // Key "level2" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(6); // length
     data.extend_from_slice(b"level2");
     // Value: nested object
     data.push(b'{'); // Level 2 object start
     
-    // Key "level3"
-    data.push(b'S');
+    // Key "level3" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(6); // length
     data.extend_from_slice(b"level3");
     // Value: nested object
     data.push(b'{'); // Level 3 object start
     
-    // Key "level4"
-    data.push(b'S');
+    // Key "level4" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(6); // length
     data.extend_from_slice(b"level4");
@@ -1054,57 +1017,57 @@ fn test_deserialize_object_level_7_all_data_types() {
     // }
     let mut data = vec![b'{']; // Object start
     
-    // null_val: null
-    data.push(b'S'); data.push(b'U'); data.push(8); data.extend_from_slice(b"null_val");
+    // null_val: null (no 'S' marker for keys per UBJSON spec)
+    data.push(b'U'); data.push(8); data.extend_from_slice(b"null_val");
     data.push(b'Z');
     
     // bool_true: true
-    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"bool_true");
+    data.push(b'U'); data.push(9); data.extend_from_slice(b"bool_true");
     data.push(b'T');
     
     // bool_false: false
-    data.push(b'S'); data.push(b'U'); data.push(10); data.extend_from_slice(b"bool_false");
+    data.push(b'U'); data.push(10); data.extend_from_slice(b"bool_false");
     data.push(b'F');
     
     // int8_val: -42
-    data.push(b'S'); data.push(b'U'); data.push(8); data.extend_from_slice(b"int8_val");
+    data.push(b'U'); data.push(8); data.extend_from_slice(b"int8_val");
     data.push(b'i'); data.push((-42i8) as u8);
     
     // uint8_val: 200
-    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"uint8_val");
+    data.push(b'U'); data.push(9); data.extend_from_slice(b"uint8_val");
     data.push(b'U'); data.push(200);
     
     // int16_val: -1000
-    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"int16_val");
+    data.push(b'U'); data.push(9); data.extend_from_slice(b"int16_val");
     data.push(b'I'); data.extend_from_slice(&(-1000i16).to_be_bytes());
     
     // int32_val: 123456
-    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"int32_val");
+    data.push(b'U'); data.push(9); data.extend_from_slice(b"int32_val");
     data.push(b'l'); data.extend_from_slice(&123456i32.to_be_bytes());
     
     // int64_val: -9876543210
-    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"int64_val");
+    data.push(b'U'); data.push(9); data.extend_from_slice(b"int64_val");
     data.push(b'L'); data.extend_from_slice(&(-9876543210i64).to_be_bytes());
     
     // float32_val: 3.14159
-    data.push(b'S'); data.push(b'U'); data.push(11); data.extend_from_slice(b"float32_val");
+    data.push(b'U'); data.push(11); data.extend_from_slice(b"float32_val");
     data.push(b'd'); data.extend_from_slice(&3.14159f32.to_be_bytes());
     
     // float64_val: 2.718281828459045
-    data.push(b'S'); data.push(b'U'); data.push(11); data.extend_from_slice(b"float64_val");
+    data.push(b'U'); data.push(11); data.extend_from_slice(b"float64_val");
     data.push(b'D'); data.extend_from_slice(&2.718281828459045f64.to_be_bytes());
     
     // char_val: 'A'
-    data.push(b'S'); data.push(b'U'); data.push(8); data.extend_from_slice(b"char_val");
+    data.push(b'U'); data.push(8); data.extend_from_slice(b"char_val");
     data.push(b'C'); data.push(b'A');
     
     // string_val: "Hello"
-    data.push(b'S'); data.push(b'U'); data.push(10); data.extend_from_slice(b"string_val");
+    data.push(b'U'); data.push(10); data.extend_from_slice(b"string_val");
     data.push(b'S'); data.push(b'U'); data.push(5); data.extend_from_slice(b"Hello");
     
     // high_precision: "123.456789012345678901234567890"
     let hp_str = "123.456789012345678901234567890";
-    data.push(b'S'); data.push(b'U'); data.push(14); data.extend_from_slice(b"high_precision");
+    data.push(b'U'); data.push(14); data.extend_from_slice(b"high_precision");
     data.push(b'H'); data.push(b'U'); data.push(hp_str.len() as u8); data.extend_from_slice(hp_str.as_bytes());
     
     data.push(b'}'); // Object end
@@ -1139,7 +1102,6 @@ fn test_deserialize_object_level_8_large_object() {
     for i in 0..num_keys {
         // Key: "key_XX"
         let key = format!("key_{:02}", i);
-        data.push(b'S');
         data.push(b'U');
         data.push(key.len() as u8);
         data.extend_from_slice(key.as_bytes());
@@ -1182,7 +1144,6 @@ fn test_deserialize_object_with_unicode_keys() {
     // Key "名前" (name in Japanese)
     let name_key = "名前";
     let name_key_bytes = name_key.as_bytes();
-    data.push(b'S');
     data.push(b'U');
     data.push(name_key_bytes.len() as u8);
     data.extend_from_slice(name_key_bytes);
@@ -1197,7 +1158,6 @@ fn test_deserialize_object_with_unicode_keys() {
     // Key "年齢" (age in Japanese)
     let age_key = "年齢";
     let age_key_bytes = age_key.as_bytes();
-    data.push(b'S');
     data.push(b'U');
     data.push(age_key_bytes.len() as u8);
     data.extend_from_slice(age_key_bytes);
@@ -1208,7 +1168,6 @@ fn test_deserialize_object_with_unicode_keys() {
     // Key "🌟" (star emoji)
     let star_key = "🌟";
     let star_key_bytes = star_key.as_bytes();
-    data.push(b'S');
     data.push(b'U');
     data.push(star_key_bytes.len() as u8);
     data.extend_from_slice(star_key_bytes);
@@ -1239,8 +1198,7 @@ fn test_deserialize_object_with_binary_data_approaches() {
     // {"image_data": [255, 0, 171, 205], "format": "raw"}
     let mut data = vec![b'{']; // Object start
     
-    // Key "image_data"
-    data.push(b'S');
+    // Key "image_data" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(10); // length
     data.extend_from_slice(b"image_data");
@@ -1253,8 +1211,7 @@ fn test_deserialize_object_with_binary_data_approaches() {
     data.push(b'U'); data.push(205);  // UInt8(205)
     data.push(b']'); // Array end
     
-    // Key "format"
-    data.push(b'S');
+    // Key "format" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(6); // length
     data.extend_from_slice(b"format");
@@ -1290,8 +1247,7 @@ fn test_deserialize_object_with_base64_binary_data() {
     // {"data": "/wCrzQ==", "encoding": "base64", "size": 4}
     let mut data = vec![b'{']; // Object start
     
-    // Key "data"
-    data.push(b'S');
+    // Key "data" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(4); // length
     data.extend_from_slice(b"data");
@@ -1303,8 +1259,7 @@ fn test_deserialize_object_with_base64_binary_data() {
     data.push(base64_data.len() as u8);
     data.extend_from_slice(base64_data.as_bytes());
     
-    // Key "encoding"
-    data.push(b'S');
+    // Key "encoding" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(8); // length
     data.extend_from_slice(b"encoding");
@@ -1315,8 +1270,7 @@ fn test_deserialize_object_with_base64_binary_data() {
     data.push(6); // length
     data.extend_from_slice(b"base64");
     
-    // Key "size"
-    data.push(b'S');
+    // Key "size" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(4); // length
     data.extend_from_slice(b"size");
@@ -1346,8 +1300,7 @@ fn test_deserialize_object_with_hex_binary_data() {
     // {"checksum": "ff00abcd", "algorithm": "crc32"}
     let mut data = vec![b'{']; // Object start
     
-    // Key "checksum"
-    data.push(b'S');
+    // Key "checksum" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(8); // length
     data.extend_from_slice(b"checksum");
@@ -1358,8 +1311,7 @@ fn test_deserialize_object_with_hex_binary_data() {
     data.push(8); // length
     data.extend_from_slice(b"ff00abcd");
     
-    // Key "algorithm"
-    data.push(b'S');
+    // Key "algorithm" (no 'S' marker for keys per UBJSON spec)
     data.push(b'U');
     data.push(9); // length
     data.extend_from_slice(b"algorithm");
@@ -1396,20 +1348,20 @@ fn test_binary_data_real_world_example() {
     // }
     let mut data = vec![b'{']; // Object start
     
-    // filename
-    data.push(b'S'); data.push(b'U'); data.push(8); data.extend_from_slice(b"filename");
+    // filename (no 'S' marker for keys per UBJSON spec)
+    data.push(b'U'); data.push(8); data.extend_from_slice(b"filename");
     data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"photo.jpg");
     
     // width
-    data.push(b'S'); data.push(b'U'); data.push(5); data.extend_from_slice(b"width");
+    data.push(b'U'); data.push(5); data.extend_from_slice(b"width");
     data.push(b'I'); data.extend_from_slice(&1920i16.to_be_bytes());
     
     // height
-    data.push(b'S'); data.push(b'U'); data.push(6); data.extend_from_slice(b"height");
+    data.push(b'U'); data.push(6); data.extend_from_slice(b"height");
     data.push(b'I'); data.extend_from_slice(&1080i16.to_be_bytes());
     
     // thumbnail (JPEG header bytes: FF D8 FF E0 00 10)
-    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"thumbnail");
+    data.push(b'U'); data.push(9); data.extend_from_slice(b"thumbnail");
     data.push(b'['); // Array start
     data.push(b'U'); data.push(255); // 0xFF
     data.push(b'U'); data.push(216); // 0xD8
@@ -1420,7 +1372,7 @@ fn test_binary_data_real_world_example() {
     data.push(b']'); // Array end
     
     // thumbnail_format
-    data.push(b'S'); data.push(b'U'); data.push(16); data.extend_from_slice(b"thumbnail_format");
+    data.push(b'U'); data.push(16); data.extend_from_slice(b"thumbnail_format");
     data.push(b'S'); data.push(b'U'); data.push(4); data.extend_from_slice(b"jpeg");
     
     data.push(b'}'); // Object end

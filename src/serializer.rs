@@ -206,8 +206,7 @@ impl<W: Write> UbjsonSerializer<W> {
         
         // Serialize each key-value pair
         for (key, value) in object {
-            // Write the key as a full string value (with 'S' marker)
-            write_type_marker(&mut self.writer, UbjsonType::String)?;
+            // Write the key as a raw string (without 'S' marker per UBJSON spec)
             write_string(&mut self.writer, key)?;
             // Write the value
             self.serialize_value(value)?;

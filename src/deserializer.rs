@@ -320,28 +320,21 @@ impl<R: Read> UbjsonDeserializer<R> {
         }
     }
 
-    /// Deserialize a standard object when we've already read the first key's type marker.
-    fn deserialize_standard_object_with_first_key(&mut self, first_marker: UbjsonType) -> Result<UbjsonValue> {
+    /// Deserialize a standard object when we've already read the first byte.
+    fn deserialize_standard_object_with_first_key(&mut self, first_byte: UbjsonType) -> Result<UbjsonValue> {
         let mut pairs = std::collections::HashMap::new();
         let mut pair_count = 0;
 
         // Handle the first key we already read
-        if first_marker != UbjsonType::ObjectEnd {
+        if first_byte != UbjsonType::ObjectEnd {
             // Check size limit
             if pair_count >= self.max_size {
                 return Err(UbjsonError::SizeLimitExceeded(self.max_size));
             }
 
-            // Keys must be strings in UBJSON objects
-            if first_marker != UbjsonType::String {
-                return Err(UbjsonError::invalid_format(format!(
-                    "Object keys must be strings, found: {}",
-                    first_marker
-                )));
-            }
-
-            // Read the key string
-            let key = crate::encoding::read_string(&mut self.reader)?;
+            // The first byte we read should be the start of a string length for the key
+            // Convert the type marker back to a byte and read it as a length marker
+            let key = self.read_string_with_length_marker(first_byte)?;
 
             // Read the value
             let value = self.deserialize_value()?;
@@ -359,22 +352,14 @@ impl<R: Read> UbjsonDeserializer<R> {
                 return Err(UbjsonError::SizeLimitExceeded(self.max_size));
             }
 
-            let type_marker = read_type_marker(&mut self.reader)?;
+            let next_byte = read_type_marker(&mut self.reader)?;
             
-            if type_marker == UbjsonType::ObjectEnd {
+            if next_byte == UbjsonType::ObjectEnd {
                 break;
             }
 
-            // Keys must be strings in UBJSON objects
-            if type_marker != UbjsonType::String {
-                return Err(UbjsonError::invalid_format(format!(
-                    "Object keys must be strings, found: {}",
-                    type_marker
-                )));
-            }
-
-            // Read the key string
-            let key = crate::encoding::read_string(&mut self.reader)?;
+            // The byte we read should be the length marker for the key string
+            let key = self.read_string_with_length_marker(next_byte)?;
 
             // Check for duplicate keys
             if pairs.contains_key(&key) {
@@ -391,6 +376,60 @@ impl<R: Read> UbjsonDeserializer<R> {
         }
 
         Ok(UbjsonValue::Object(pairs))
+    }
+
+    /// Read a string when we already have the length type marker.
+    fn read_string_with_length_marker(&mut self, length_marker: UbjsonType) -> Result<String> {
+        // Read the length based on the type marker
+        let length = match length_marker {
+            UbjsonType::UInt8 => {
+                crate::encoding::read_uint8(&mut self.reader)? as usize
+            }
+            UbjsonType::Int8 => {
+                let value = crate::encoding::read_int8(&mut self.reader)?;
+                if value < 0 {
+                    return Err(UbjsonError::invalid_format("Negative string length not allowed"));
+                }
+                value as usize
+            }
+            UbjsonType::Int16 => {
+                let value = crate::encoding::read_int16(&mut self.reader)?;
+                if value < 0 {
+                    return Err(UbjsonError::invalid_format("Negative string length not allowed"));
+                }
+                value as usize
+            }
+            UbjsonType::Int32 => {
+                let value = crate::encoding::read_int32(&mut self.reader)?;
+                if value < 0 {
+                    return Err(UbjsonError::invalid_format("Negative string length not allowed"));
+                }
+                value as usize
+            }
+            UbjsonType::Int64 => {
+                let value = crate::encoding::read_int64(&mut self.reader)?;
+                if value < 0 {
+                    return Err(UbjsonError::invalid_format("Negative string length not allowed"));
+                }
+                if value > usize::MAX as i64 {
+                    return Err(UbjsonError::invalid_format("String length too large for platform"));
+                }
+                value as usize
+            }
+            _ => {
+                return Err(UbjsonError::invalid_format(format!(
+                    "Invalid string length type marker: {}",
+                    length_marker
+                )));
+            }
+        };
+
+        // Read the string content
+        let mut buffer = vec![0u8; length];
+        self.reader.read_exact(&mut buffer)?;
+        
+        let string = std::str::from_utf8(&buffer)?;
+        Ok(string.to_string())
     }
 
     /// Deserialize a strongly-typed object.
@@ -974,8 +1013,7 @@ mod tests {
         // Object with {"name": "John", "age": 30, "active": true}
         let mut data = vec![b'{']; // Object start
         
-        // Key "name"
-        data.push(b'S');
+        // Key "name" (no 'S' marker for keys per UBJSON spec)
         data.push(b'U');
         data.push(4); // length
         data.extend_from_slice(b"name");
@@ -986,7 +1024,6 @@ mod tests {
         data.extend_from_slice(b"John");
         
         // Key "age"
-        data.push(b'S');
         data.push(b'U');
         data.push(3); // length
         data.extend_from_slice(b"age");
@@ -995,7 +1032,6 @@ mod tests {
         data.push(30);
         
         // Key "active"
-        data.push(b'S');
         data.push(b'U');
         data.push(6); // length
         data.extend_from_slice(b"active");
@@ -1020,8 +1056,7 @@ mod tests {
         // Object with {"user": {"name": "John", "id": 1}}
         let mut data = vec![b'{']; // Outer object start
         
-        // Key "user"
-        data.push(b'S');
+        // Key "user" (no 'S' marker for keys per UBJSON spec)
         data.push(b'U');
         data.push(4); // length
         data.extend_from_slice(b"user");
@@ -1030,7 +1065,6 @@ mod tests {
         data.push(b'{'); // Inner object start
         
         // Key "name"
-        data.push(b'S');
         data.push(b'U');
         data.push(4); // length
         data.extend_from_slice(b"name");
@@ -1041,7 +1075,6 @@ mod tests {
         data.extend_from_slice(b"John");
         
         // Key "id"
-        data.push(b'S');
         data.push(b'U');
         data.push(2); // length
         data.extend_from_slice(b"id");
@@ -1070,8 +1103,7 @@ mod tests {
         // Object with {"numbers": [1, 2, 3], "empty": []}
         let mut data = vec![b'{']; // Object start
         
-        // Key "numbers"
-        data.push(b'S');
+        // Key "numbers" (no 'S' marker for keys per UBJSON spec)
         data.push(b'U');
         data.push(7); // length
         data.extend_from_slice(b"numbers");
@@ -1084,7 +1116,6 @@ mod tests {
         data.push(b']'); // Array end
         
         // Key "empty"
-        data.push(b'S');
         data.push(b'U');
         data.push(5); // length
         data.extend_from_slice(b"empty");
@@ -1114,8 +1145,7 @@ mod tests {
         // Object with duplicate key "name"
         let mut data = vec![b'{']; // Object start
         
-        // First "name" key
-        data.push(b'S');
+        // First "name" key (no 'S' marker for keys per UBJSON spec)
         data.push(b'U');
         data.push(4); // length
         data.extend_from_slice(b"name");
@@ -1125,7 +1155,6 @@ mod tests {
         data.extend_from_slice(b"John");
         
         // Second "name" key (duplicate)
-        data.push(b'S');
         data.push(b'U');
         data.push(4); // length
         data.extend_from_slice(b"name");
@@ -1144,10 +1173,10 @@ mod tests {
 
     #[test]
     fn test_object_non_string_key_error() {
-        // Object with non-string key
+        // Object with invalid length marker for key (should be U, i, I, l, or L)
         let data = vec![
             b'{',           // Object start
-            b'i', 42,       // int8(42) as key (invalid)
+            b'T',           // Invalid length marker (true boolean, not a valid length type)
             b'S', b'U', 5, b'v', b'a', b'l', b'u', b'e', // "value"
             b'}',           // Object end
         ];
@@ -1187,7 +1216,6 @@ mod tests {
         // Create nested objects: {"a": {"b": {"c": {"d": {"e": null}}}}}
         for i in 0..depth {
             data.push(b'{');
-            data.push(b'S');
             data.push(b'U');
             data.push(1); // key length
             data.push(b'a' + i as u8); // key: "a", "b", "c", etc.
@@ -1228,8 +1256,7 @@ mod tests {
         
         let size_limit = 3;
         for i in 0..size_limit + 1 {
-            // Key
-            data.push(b'S');
+            // Key (no 'S' marker for keys per UBJSON spec)
             data.push(b'U');
             data.push(1); // key length
             data.push(b'a' + i as u8); // key: "a", "b", "c", etc.
