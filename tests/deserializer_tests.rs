@@ -240,20 +240,36 @@ fn test_limits() {
 }
 
 #[test]
-fn test_container_markers_not_implemented() {
-    // Test array start marker
-    let data = vec![b'['];
+fn test_deserialize_containers() {
+    // Test empty array
+    let data = vec![b'[', b']'];
     let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
-    let result = deserializer.deserialize_value();
-    assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), UbjsonError::UnsupportedType(_)));
+    let result = deserializer.deserialize_value().unwrap();
+    assert_eq!(result, UbjsonValue::Array(vec![]));
 
-    // Test object start marker
-    let data = vec![b'{'];
+    // Test empty object
+    let data = vec![b'{', b'}'];
     let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
-    let result = deserializer.deserialize_value();
-    assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), UbjsonError::UnsupportedType(_)));
+    let result = deserializer.deserialize_value().unwrap();
+    assert_eq!(result, UbjsonValue::Object(std::collections::HashMap::new()));
+
+    // Test simple array with mixed types
+    let data = vec![
+        b'[',           // Array start
+        b'Z',           // null
+        b'T',           // true
+        b'i', 42,       // int8(42)
+        b']',           // Array end
+    ];
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    let expected = UbjsonValue::Array(vec![
+        UbjsonValue::Null,
+        UbjsonValue::Bool(true),
+        UbjsonValue::Int8(42),
+    ]);
+    assert_eq!(result, expected);
 }
 
 #[test]
@@ -271,6 +287,245 @@ fn test_unexpected_container_end_markers() {
     let result = deserializer.deserialize_value();
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), UbjsonError::InvalidFormat(_)));
+}
+
+#[test]
+fn test_container_error_conditions() {
+    // Test object with duplicate keys
+    let mut data = vec![b'{']; // Object start
+    
+    // First "name" key
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"name");
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"John");
+    
+    // Second "name" key (duplicate)
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"name");
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"Jane");
+    
+    data.push(b'}'); // Object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value();
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), UbjsonError::InvalidFormat(_)));
+
+    // Test object with non-string key
+    let data = vec![
+        b'{',           // Object start
+        b'i', 42,       // int8(42) as key (invalid)
+        b'S', b'U', 5, b'v', b'a', b'l', b'u', b'e', // "value"
+        b'}',           // Object end
+    ];
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value();
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), UbjsonError::InvalidFormat(_)));
+}
+
+#[test]
+fn test_container_depth_limits() {
+    // Test array depth limit
+    let mut data = vec![];
+    let depth = 5;
+    
+    // Create nested arrays: [[[[[null]]]]]
+    for _ in 0..depth {
+        data.push(b'[');
+    }
+    data.push(b'Z'); // null value
+    for _ in 0..depth {
+        data.push(b']');
+    }
+    
+    let mut deserializer = UbjsonDeserializer::with_limits(Cursor::new(data), 3, 1000);
+    let result = deserializer.deserialize_value();
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), UbjsonError::DepthLimitExceeded(3)));
+
+    // Test object depth limit
+    let mut data = vec![];
+    let depth = 5;
+    
+    // Create nested objects: {"a": {"b": {"c": {"d": {"e": null}}}}}
+    for i in 0..depth {
+        data.push(b'{');
+        data.push(b'S');
+        data.push(b'U');
+        data.push(1); // key length
+        data.push(b'a' + i as u8); // key: "a", "b", "c", etc.
+    }
+    data.push(b'Z'); // null value
+    for _ in 0..depth {
+        data.push(b'}');
+    }
+    
+    let mut deserializer = UbjsonDeserializer::with_limits(Cursor::new(data), 3, 1000);
+    let result = deserializer.deserialize_value();
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), UbjsonError::DepthLimitExceeded(3)));
+}
+
+#[test]
+fn test_container_size_limits() {
+    // Test array size limit
+    let mut data = vec![b'[']; // Array start
+    
+    let size_limit = 3;
+    for i in 0..size_limit + 1 {
+        data.push(b'i');
+        data.push(i as u8);
+    }
+    data.push(b']'); // Array end
+    
+    let mut deserializer = UbjsonDeserializer::with_limits(Cursor::new(data), 1000, size_limit);
+    let result = deserializer.deserialize_value();
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), UbjsonError::SizeLimitExceeded(_)));
+
+    // Test object size limit
+    let mut data = vec![b'{']; // Object start
+    
+    let size_limit = 2;
+    for i in 0..size_limit + 1 {
+        // Key
+        data.push(b'S');
+        data.push(b'U');
+        data.push(4); // length
+        data.extend_from_slice(b"key");
+        data.push(b'0' + i as u8); // Make keys unique: "key0", "key1", etc.
+        
+        // Value
+        data.push(b'i');
+        data.push(i as u8);
+    }
+    data.push(b'}'); // Object end
+    
+    let mut deserializer = UbjsonDeserializer::with_limits(Cursor::new(data), 1000, size_limit);
+    let result = deserializer.deserialize_value();
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), UbjsonError::SizeLimitExceeded(_)));
+}
+
+#[test]
+fn test_complex_nested_containers() {
+    // Test complex nested structure: {"users": [{"name": "John", "scores": [95, 87]}, {"name": "Jane", "scores": []}]}
+    let mut data = vec![b'{']; // Root object start
+    
+    // Key "users"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(5); // length
+    data.extend_from_slice(b"users");
+    
+    // Value: array of user objects
+    data.push(b'['); // Users array start
+    
+    // First user object
+    data.push(b'{'); // User object start
+    
+    // Key "name"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"name");
+    // Value "John"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"John");
+    
+    // Key "scores"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"scores");
+    // Value: array [95, 87]
+    data.push(b'['); // Scores array start
+    data.push(b'i'); data.push(95);
+    data.push(b'i'); data.push(87);
+    data.push(b']'); // Scores array end
+    
+    data.push(b'}'); // User object end
+    
+    // Second user object
+    data.push(b'{'); // User object start
+    
+    // Key "name"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"name");
+    // Value "Jane"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"Jane");
+    
+    // Key "scores"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"scores");
+    // Value: empty array
+    data.push(b'['); // Scores array start
+    data.push(b']'); // Scores array end
+    
+    data.push(b'}'); // User object end
+    
+    data.push(b']'); // Users array end
+    data.push(b'}'); // Root object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    // Verify the structure
+    if let UbjsonValue::Object(root) = result {
+        if let Some(UbjsonValue::Array(users)) = root.get("users") {
+            assert_eq!(users.len(), 2);
+            
+            // Check first user
+            if let UbjsonValue::Object(user1) = &users[0] {
+                assert_eq!(user1.get("name"), Some(&UbjsonValue::String("John".to_string())));
+                if let Some(UbjsonValue::Array(scores)) = user1.get("scores") {
+                    assert_eq!(scores.len(), 2);
+                    assert_eq!(scores[0], UbjsonValue::Int8(95));
+                    assert_eq!(scores[1], UbjsonValue::Int8(87));
+                } else {
+                    panic!("Expected scores array for John");
+                }
+            } else {
+                panic!("Expected first user to be an object");
+            }
+            
+            // Check second user
+            if let UbjsonValue::Object(user2) = &users[1] {
+                assert_eq!(user2.get("name"), Some(&UbjsonValue::String("Jane".to_string())));
+                if let Some(UbjsonValue::Array(scores)) = user2.get("scores") {
+                    assert_eq!(scores.len(), 0);
+                } else {
+                    panic!("Expected scores array for Jane");
+                }
+            } else {
+                panic!("Expected second user to be an object");
+            }
+        } else {
+            panic!("Expected users array");
+        }
+    } else {
+        panic!("Expected root object");
+    }
 }
 
 #[test]
@@ -298,6 +553,37 @@ fn test_round_trip_with_serializer() {
     ];
 
     for original_value in test_values {
+        // Serialize
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::new(&mut buffer);
+        serializer.serialize_value(&original_value).unwrap();
+
+        // Deserialize
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(buffer));
+        let deserialized_value = deserializer.deserialize_value().unwrap();
+
+        // Compare
+        assert_eq!(original_value, deserialized_value);
+    }
+
+    // Test containers
+    let mut container_values = vec![
+        UbjsonValue::Array(vec![]),
+        UbjsonValue::Array(vec![
+            UbjsonValue::Int8(1),
+            UbjsonValue::String("test".to_string()),
+            UbjsonValue::Bool(true),
+        ]),
+        UbjsonValue::Object(std::collections::HashMap::new()),
+    ];
+
+    // Create a simple object
+    let mut simple_obj = std::collections::HashMap::new();
+    simple_obj.insert("key1".to_string(), UbjsonValue::Int8(42));
+    simple_obj.insert("key2".to_string(), UbjsonValue::String("value".to_string()));
+    container_values.push(UbjsonValue::Object(simple_obj));
+
+    for original_value in container_values {
         // Serialize
         let mut buffer = Vec::new();
         let mut serializer = UbjsonSerializer::new(&mut buffer);
