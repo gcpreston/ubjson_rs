@@ -189,7 +189,7 @@ fn test_container_serialization_with_optimization_flag() {
     let mut buffer = Vec::new();
     let mut serializer = UbjsonSerializer::with_optimization(&mut buffer, true);
 
-    // Test that optimization flag doesn't break standard container serialization
+    // Test that optimization flag enables container optimization for homogeneous arrays
     let array = UbjsonValue::Array(vec![
         UbjsonValue::Int8(1),
         UbjsonValue::Int8(2),
@@ -199,9 +199,19 @@ fn test_container_serialization_with_optimization_flag() {
     let result = serializer.serialize_value(&array);
     assert!(result.is_ok(), "Serialization should succeed with optimization flag");
 
-    // Verify basic structure (optimization for standard containers will be implemented later)
-    assert_eq!(buffer[0], b'[');
-    assert_eq!(buffer[buffer.len() - 1], b']');
+    // Verify optimized structure: [$][i][#][count][elements...]
+    assert_eq!(buffer[0], b'[');  // Array start
+    assert_eq!(buffer[1], b'$');  // Type marker
+    assert_eq!(buffer[2], b'i');  // Int8 type
+    assert_eq!(buffer[3], b'#');  // Count marker
+    assert_eq!(buffer[4], b'U');  // Count type (uint8)
+    assert_eq!(buffer[5], 3);     // Count value
+    // Elements follow without type markers: 1, 2, 3
+    assert_eq!(buffer[6], 1);
+    assert_eq!(buffer[7], 2);
+    assert_eq!(buffer[8], 3);
+    // No closing ']' marker since count is provided
+    assert_eq!(buffer.len(), 9);
 }
 
 #[test]

@@ -9,8 +9,9 @@ use crate::types::UbjsonType;
 use crate::value::UbjsonValue;
 use crate::encoding::{
     write_type_marker, write_int8, write_uint8, write_int16, write_int32, write_int64,
-    write_float32, write_float64, write_string, write_char
+    write_float32, write_float64, write_string, write_char, write_length
 };
+use crate::types::optimization::{TYPE_MARKER, COUNT_MARKER};
 
 /// Serializer for converting values to UBJSON binary format.
 pub struct UbjsonSerializer<W: Write> {
@@ -82,11 +83,12 @@ impl<W: Write> UbjsonSerializer<W> {
             // Standard container types
             UbjsonValue::Array(arr) => self.serialize_array(arr),
             UbjsonValue::Object(obj) => self.serialize_object(obj),
-            UbjsonValue::StronglyTypedArray { .. } => {
-                Err(UbjsonError::unsupported_type("StronglyTypedArray serialization not yet implemented"))
+            // Optimized container types
+            UbjsonValue::StronglyTypedArray { element_type, count, elements } => {
+                self.serialize_strongly_typed_array(*element_type, *count, elements)
             }
-            UbjsonValue::StronglyTypedObject { .. } => {
-                Err(UbjsonError::unsupported_type("StronglyTypedObject serialization not yet implemented"))
+            UbjsonValue::StronglyTypedObject { value_type, count, pairs } => {
+                self.serialize_strongly_typed_object(*value_type, *count, pairs)
             }
         }
     }
@@ -173,6 +175,13 @@ impl<W: Write> UbjsonSerializer<W> {
             return Err(UbjsonError::DepthLimitExceeded(self.max_depth));
         }
 
+        // Check if optimization is enabled and array is homogeneous
+        if self.optimize_containers && !array.is_empty() {
+            if let Some(element_type) = self.detect_homogeneous_array_type(array) {
+                return self.serialize_strongly_typed_array(element_type, Some(array.len()), array);
+            }
+        }
+
         // Write array start marker
         write_type_marker(&mut self.writer, UbjsonType::ArrayStart)?;
         
@@ -196,6 +205,13 @@ impl<W: Write> UbjsonSerializer<W> {
         // Check depth limit
         if self.current_depth >= self.max_depth {
             return Err(UbjsonError::DepthLimitExceeded(self.max_depth));
+        }
+
+        // Check if optimization is enabled and object is homogeneous
+        if self.optimize_containers && !object.is_empty() {
+            if let Some(value_type) = self.detect_homogeneous_object_type(object) {
+                return self.serialize_strongly_typed_object(value_type, Some(object.len()), object);
+            }
         }
 
         // Write object start marker
@@ -232,6 +248,180 @@ impl<W: Write> UbjsonSerializer<W> {
     /// Consume the serializer and return the underlying writer.
     pub fn into_writer(self) -> W {
         self.writer
+    }
+
+    /// Detect if an array is homogeneous and return the common element type.
+    fn detect_homogeneous_array_type(&self, array: &[UbjsonValue]) -> Option<UbjsonType> {
+        if array.is_empty() {
+            return None;
+        }
+
+        let first_type = array[0].get_type();
+        
+        // Only optimize primitive types (not containers)
+        if !first_type.is_primitive() {
+            return None;
+        }
+
+        // Check if all elements have the same type
+        for element in array.iter().skip(1) {
+            if element.get_type() != first_type {
+                return None;
+            }
+        }
+
+        Some(first_type)
+    }
+
+    /// Detect if an object is homogeneous and return the common value type.
+    fn detect_homogeneous_object_type(&self, object: &std::collections::HashMap<String, UbjsonValue>) -> Option<UbjsonType> {
+        if object.is_empty() {
+            return None;
+        }
+
+        let mut values = object.values();
+        let first_type = values.next()?.get_type();
+        
+        // Only optimize primitive types (not containers)
+        if !first_type.is_primitive() {
+            return None;
+        }
+
+        // Check if all values have the same type
+        for value in values {
+            if value.get_type() != first_type {
+                return None;
+            }
+        }
+
+        Some(first_type)
+    }
+
+    /// Serialize a strongly-typed array with optimization markers.
+    fn serialize_strongly_typed_array(
+        &mut self,
+        element_type: UbjsonType,
+        count: Option<usize>,
+        elements: &[UbjsonValue],
+    ) -> Result<()> {
+        // Check depth limit
+        if self.current_depth >= self.max_depth {
+            return Err(UbjsonError::DepthLimitExceeded(self.max_depth));
+        }
+
+        // Write array start marker
+        write_type_marker(&mut self.writer, UbjsonType::ArrayStart)?;
+        
+        // Write type optimization marker '$'
+        self.writer.write_all(&[TYPE_MARKER])?;
+        
+        // Write the element type
+        write_type_marker(&mut self.writer, element_type)?;
+        
+        // Write count optimization if provided
+        if let Some(count) = count {
+            self.writer.write_all(&[COUNT_MARKER])?;
+            write_length(&mut self.writer, count)?;
+        }
+        
+        // Increase depth for nested serialization
+        self.current_depth += 1;
+        
+        // Serialize elements without type markers (since type is already specified)
+        for element in elements {
+            self.serialize_value_without_type_marker(element, element_type)?;
+        }
+        
+        // Decrease depth
+        self.current_depth -= 1;
+        
+        // Write array end marker (only if count was not provided)
+        if count.is_none() {
+            write_type_marker(&mut self.writer, UbjsonType::ArrayEnd)?;
+        }
+        
+        Ok(())
+    }
+
+    /// Serialize a strongly-typed object with optimization markers.
+    fn serialize_strongly_typed_object(
+        &mut self,
+        value_type: UbjsonType,
+        count: Option<usize>,
+        pairs: &std::collections::HashMap<String, UbjsonValue>,
+    ) -> Result<()> {
+        // Check depth limit
+        if self.current_depth >= self.max_depth {
+            return Err(UbjsonError::DepthLimitExceeded(self.max_depth));
+        }
+
+        // Write object start marker
+        write_type_marker(&mut self.writer, UbjsonType::ObjectStart)?;
+        
+        // Write type optimization marker '$'
+        self.writer.write_all(&[TYPE_MARKER])?;
+        
+        // Write the value type
+        write_type_marker(&mut self.writer, value_type)?;
+        
+        // Write count optimization if provided
+        if let Some(count) = count {
+            self.writer.write_all(&[COUNT_MARKER])?;
+            write_length(&mut self.writer, count)?;
+        }
+        
+        // Increase depth for nested serialization
+        self.current_depth += 1;
+        
+        // Serialize key-value pairs without value type markers
+        for (key, value) in pairs {
+            // Write the key as a raw string (without 'S' marker per UBJSON spec)
+            write_string(&mut self.writer, key)?;
+            // Write the value without type marker (since type is already specified)
+            self.serialize_value_without_type_marker(value, value_type)?;
+        }
+        
+        // Decrease depth
+        self.current_depth -= 1;
+        
+        // Write object end marker (only if count was not provided)
+        if count.is_none() {
+            write_type_marker(&mut self.writer, UbjsonType::ObjectEnd)?;
+        }
+        
+        Ok(())
+    }
+
+    /// Serialize a value without its type marker (for optimized containers).
+    fn serialize_value_without_type_marker(&mut self, value: &UbjsonValue, expected_type: UbjsonType) -> Result<()> {
+        // Verify the value matches the expected type
+        if value.get_type() != expected_type {
+            return Err(UbjsonError::invalid_format(format!(
+                "Value type {} does not match expected type {}",
+                value.get_type(),
+                expected_type
+            )));
+        }
+
+        match value {
+            UbjsonValue::Null => Ok(()), // No data to write for null
+            UbjsonValue::Bool(true) => Ok(()), // No data to write for true
+            UbjsonValue::Bool(false) => Ok(()), // No data to write for false
+            UbjsonValue::Int8(n) => write_int8(&mut self.writer, *n),
+            UbjsonValue::UInt8(n) => write_uint8(&mut self.writer, *n),
+            UbjsonValue::Int16(n) => write_int16(&mut self.writer, *n),
+            UbjsonValue::Int32(n) => write_int32(&mut self.writer, *n),
+            UbjsonValue::Int64(n) => write_int64(&mut self.writer, *n),
+            UbjsonValue::Float32(n) => write_float32(&mut self.writer, *n),
+            UbjsonValue::Float64(n) => write_float64(&mut self.writer, *n),
+            UbjsonValue::HighPrecision(s) => write_string(&mut self.writer, s),
+            UbjsonValue::Char(c) => write_char(&mut self.writer, *c),
+            UbjsonValue::String(s) => write_string(&mut self.writer, s),
+            // Containers should not be in optimized containers (only primitives)
+            _ => Err(UbjsonError::invalid_format(
+                "Container types cannot be used in optimized containers"
+            )),
+        }
     }
 }
 
@@ -651,6 +841,320 @@ mod tests {
         // Test that the serializer was created with the correct settings
         serializer.serialize_value(&UbjsonValue::Null).unwrap();
         assert_eq!(buffer, vec![b'Z']);
+    }
+
+    #[test]
+    fn test_serialize_homogeneous_int8_array_with_optimization() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::with_optimization(&mut buffer, true);
+        
+        let array = UbjsonValue::Array(vec![
+            UbjsonValue::Int8(1),
+            UbjsonValue::Int8(2),
+            UbjsonValue::Int8(3),
+        ]);
+        serializer.serialize_value(&array).unwrap();
+        
+        let expected = vec![
+            b'[',           // Array start
+            b'$',           // Type marker
+            b'i',           // Int8 type
+            b'#',           // Count marker
+            b'U', 3,        // Count (3 as uint8)
+            1, 2, 3,        // Elements without type markers
+        ];
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_serialize_homogeneous_string_array_with_optimization() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::with_optimization(&mut buffer, true);
+        
+        let array = UbjsonValue::Array(vec![
+            UbjsonValue::String("hello".to_string()),
+            UbjsonValue::String("world".to_string()),
+        ]);
+        serializer.serialize_value(&array).unwrap();
+        
+        let expected = vec![
+            b'[',           // Array start
+            b'$',           // Type marker
+            b'S',           // String type
+            b'#',           // Count marker
+            b'U', 2,        // Count (2 as uint8)
+            b'U', 5,        // Length of "hello"
+            b'h', b'e', b'l', b'l', b'o', // "hello"
+            b'U', 5,        // Length of "world"
+            b'w', b'o', b'r', b'l', b'd', // "world"
+        ];
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_serialize_heterogeneous_array_without_optimization() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::with_optimization(&mut buffer, true);
+        
+        let array = UbjsonValue::Array(vec![
+            UbjsonValue::Int8(1),
+            UbjsonValue::String("hello".to_string()),
+            UbjsonValue::Bool(true),
+        ]);
+        serializer.serialize_value(&array).unwrap();
+        
+        // Should fall back to standard array format
+        let expected = vec![
+            b'[',           // Array start
+            b'i', 1,        // Int8(1)
+            b'S', b'U', 5,  // String length prefix
+            b'h', b'e', b'l', b'l', b'o', // String content
+            b'T',           // True
+            b']',           // Array end
+        ];
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_serialize_homogeneous_object_with_optimization() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::with_optimization(&mut buffer, true);
+        
+        let mut map = std::collections::HashMap::new();
+        map.insert("a".to_string(), UbjsonValue::Int32(100));
+        map.insert("b".to_string(), UbjsonValue::Int32(200));
+        
+        let object = UbjsonValue::Object(map);
+        serializer.serialize_value(&object).unwrap();
+        
+        // Check that optimization markers are present
+        assert_eq!(buffer[0], b'{'); // Object start
+        assert_eq!(buffer[1], b'$'); // Type marker
+        assert_eq!(buffer[2], b'l'); // Int32 type
+        assert_eq!(buffer[3], b'#'); // Count marker
+        assert_eq!(buffer[4], b'U'); // Count type (uint8)
+        assert_eq!(buffer[5], 2);    // Count value (2)
+        
+        // The rest contains key-value pairs without value type markers
+        // Order is not guaranteed with HashMap, so we just check structure
+        assert!(buffer.len() > 6);
+    }
+
+    #[test]
+    fn test_serialize_heterogeneous_object_without_optimization() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::with_optimization(&mut buffer, true);
+        
+        let mut map = std::collections::HashMap::new();
+        map.insert("num".to_string(), UbjsonValue::Int32(42));
+        map.insert("str".to_string(), UbjsonValue::String("hello".to_string()));
+        
+        let object = UbjsonValue::Object(map);
+        serializer.serialize_value(&object).unwrap();
+        
+        // Should fall back to standard object format
+        assert_eq!(buffer[0], b'{'); // Object start
+        assert_eq!(buffer[buffer.len() - 1], b'}'); // Object end
+        
+        // Should not contain optimization markers
+        assert!(!buffer.contains(&b'$'));
+        assert!(!buffer.contains(&b'#'));
+    }
+
+    #[test]
+    fn test_serialize_strongly_typed_array_explicit() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::new(&mut buffer);
+        
+        let array = UbjsonValue::StronglyTypedArray {
+            element_type: UbjsonType::Float32,
+            count: Some(2),
+            elements: vec![
+                UbjsonValue::Float32(1.5),
+                UbjsonValue::Float32(2.5),
+            ],
+        };
+        serializer.serialize_value(&array).unwrap();
+        
+        let expected_start = vec![
+            b'[',           // Array start
+            b'$',           // Type marker
+            b'd',           // Float32 type
+            b'#',           // Count marker
+            b'U', 2,        // Count (2 as uint8)
+        ];
+        
+        // Check the start of the buffer
+        assert_eq!(&buffer[0..6], &expected_start[..]);
+        
+        // Check that float values are present (exact bytes depend on IEEE 754 representation)
+        assert_eq!(buffer.len(), 6 + 8); // 6 bytes header + 2 * 4 bytes for floats
+    }
+
+    #[test]
+    fn test_serialize_strongly_typed_object_explicit() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::new(&mut buffer);
+        
+        let mut pairs = std::collections::HashMap::new();
+        pairs.insert("x".to_string(), UbjsonValue::Bool(true));
+        pairs.insert("y".to_string(), UbjsonValue::Bool(false));
+        
+        let object = UbjsonValue::StronglyTypedObject {
+            value_type: UbjsonType::True, // Using True as the type (Bool values will be handled specially)
+            count: Some(2),
+            pairs,
+        };
+        
+        // This should fail because Bool values can't be properly handled in strongly-typed containers
+        // since True and False are different types
+        let result = serializer.serialize_value(&object);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_serialize_strongly_typed_array_without_count() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::new(&mut buffer);
+        
+        let array = UbjsonValue::StronglyTypedArray {
+            element_type: UbjsonType::UInt8,
+            count: None,
+            elements: vec![
+                UbjsonValue::UInt8(10),
+                UbjsonValue::UInt8(20),
+                UbjsonValue::UInt8(30),
+            ],
+        };
+        serializer.serialize_value(&array).unwrap();
+        
+        let expected = vec![
+            b'[',           // Array start
+            b'$',           // Type marker
+            b'U',           // UInt8 type
+            10, 20, 30,     // Elements without type markers
+            b']',           // Array end (since no count was provided)
+        ];
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_serialize_strongly_typed_object_without_count() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::new(&mut buffer);
+        
+        let mut pairs = std::collections::HashMap::new();
+        pairs.insert("a".to_string(), UbjsonValue::Int16(100));
+        pairs.insert("b".to_string(), UbjsonValue::Int16(200));
+        
+        let object = UbjsonValue::StronglyTypedObject {
+            value_type: UbjsonType::Int16,
+            count: None,
+            pairs,
+        };
+        serializer.serialize_value(&object).unwrap();
+        
+        // Check structure
+        assert_eq!(buffer[0], b'{'); // Object start
+        assert_eq!(buffer[1], b'$'); // Type marker
+        assert_eq!(buffer[2], b'I'); // Int16 type
+        assert_eq!(buffer[buffer.len() - 1], b'}'); // Object end
+        
+        // Should not contain count marker since count was None
+        let has_count_marker = buffer.windows(2).any(|w| w == [b'#', b'U'] || w == [b'#', b'I'] || w == [b'#', b'l'] || w == [b'#', b'L']);
+        assert!(!has_count_marker);
+    }
+
+    #[test]
+    fn test_serialize_empty_array_no_optimization() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::with_optimization(&mut buffer, true);
+        
+        let array = UbjsonValue::Array(vec![]);
+        serializer.serialize_value(&array).unwrap();
+        
+        // Empty arrays should not be optimized
+        assert_eq!(buffer, vec![b'[', b']']);
+    }
+
+    #[test]
+    fn test_serialize_empty_object_no_optimization() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::with_optimization(&mut buffer, true);
+        
+        let object = UbjsonValue::Object(std::collections::HashMap::new());
+        serializer.serialize_value(&object).unwrap();
+        
+        // Empty objects should not be optimized
+        assert_eq!(buffer, vec![b'{', b'}']);
+    }
+
+    #[test]
+    fn test_serialize_array_with_containers_no_optimization() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::with_optimization(&mut buffer, true);
+        
+        let array = UbjsonValue::Array(vec![
+            UbjsonValue::Array(vec![UbjsonValue::Int8(1)]),
+            UbjsonValue::Array(vec![UbjsonValue::Int8(2)]),
+        ]);
+        serializer.serialize_value(&array).unwrap();
+        
+        // The outer array containing containers should not be optimized
+        assert_eq!(buffer[0], b'['); // Array start
+        assert_eq!(buffer[buffer.len() - 1], b']'); // Array end
+        
+        // The outer array should not have optimization markers immediately after the start
+        // (buffer[1] should be '[' for the first inner array, not '$')
+        assert_eq!(buffer[1], b'['); // First inner array start
+        
+        // But the inner arrays can be optimized since they contain homogeneous primitives
+        // This is correct behavior - only the outer array should not be optimized
+    }
+
+    #[test]
+    fn test_serialize_optimization_disabled() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::with_optimization(&mut buffer, false);
+        
+        let array = UbjsonValue::Array(vec![
+            UbjsonValue::Int8(1),
+            UbjsonValue::Int8(2),
+            UbjsonValue::Int8(3),
+        ]);
+        serializer.serialize_value(&array).unwrap();
+        
+        // Should use standard format even though array is homogeneous
+        let expected = vec![
+            b'[',           // Array start
+            b'i', 1,        // Int8(1)
+            b'i', 2,        // Int8(2)
+            b'i', 3,        // Int8(3)
+            b']',           // Array end
+        ];
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_serialize_value_type_mismatch_error() {
+        let mut buffer = Vec::new();
+        let mut serializer = UbjsonSerializer::new(&mut buffer);
+        
+        // Create a strongly-typed array with mismatched element type
+        let array = UbjsonValue::StronglyTypedArray {
+            element_type: UbjsonType::Int8,
+            count: Some(1),
+            elements: vec![UbjsonValue::Int32(42)], // Wrong type!
+        };
+        
+        let result = serializer.serialize_value(&array);
+        assert!(result.is_err());
+        
+        if let Err(UbjsonError::InvalidFormat(msg)) = result {
+            assert!(msg.contains("does not match expected type"));
+        } else {
+            panic!("Expected InvalidFormat error");
+        }
     }
 
 
