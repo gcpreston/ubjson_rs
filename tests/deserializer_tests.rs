@@ -597,3 +597,636 @@ fn test_round_trip_with_serializer() {
         assert_eq!(original_value, deserialized_value);
     }
 }
+
+// ===== OBJECT COMPLEXITY TESTS =====
+
+#[test]
+fn test_deserialize_object_level_1_simple() {
+    // Level 1: Simple object with one key-value pair
+    // {"type": 3}
+    let data = vec![
+        b'{',           // Object start
+        b'S',           // String type marker for key
+        b'U', 4,        // Length: uint8(4) for "type"
+        b't', b'y', b'p', b'e',  // Key: "type"
+        b'U', 3,        // Value: uint8(3)
+        b'}',           // Object end
+    ];
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+
+    let mut expected_map = std::collections::HashMap::new();
+    expected_map.insert("type".to_string(), UbjsonValue::UInt8(3));
+    let expected = UbjsonValue::Object(expected_map);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_deserialize_object_level_2_multiple_primitives() {
+    // Level 2: Object with multiple primitive values of different types
+    // {"id": 42, "name": "Alice", "active": true, "score": 95.5}
+    let mut data = vec![b'{']; // Object start
+    
+    // Key "id"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(2); // length
+    data.extend_from_slice(b"id");
+    // Value 42
+    data.push(b'i');
+    data.push(42);
+    
+    // Key "name"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"name");
+    // Value "Alice"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(5); // length
+    data.extend_from_slice(b"Alice");
+    
+    // Key "active"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"active");
+    // Value true
+    data.push(b'T');
+    
+    // Key "score"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(5); // length
+    data.extend_from_slice(b"score");
+    // Value 95.5 as float32
+    data.push(b'd');
+    data.extend_from_slice(&95.5f32.to_be_bytes());
+    
+    data.push(b'}'); // Object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    let mut expected_map = std::collections::HashMap::new();
+    expected_map.insert("id".to_string(), UbjsonValue::Int8(42));
+    expected_map.insert("name".to_string(), UbjsonValue::String("Alice".to_string()));
+    expected_map.insert("active".to_string(), UbjsonValue::Bool(true));
+    expected_map.insert("score".to_string(), UbjsonValue::Float32(95.5));
+    let expected = UbjsonValue::Object(expected_map);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_deserialize_object_level_3_with_arrays() {
+    // Level 3: Object containing arrays
+    // {"tags": ["rust", "json"], "numbers": [1, 2, 3], "empty": []}
+    let mut data = vec![b'{']; // Object start
+    
+    // Key "tags"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"tags");
+    // Value: array ["rust", "json"]
+    data.push(b'['); // Array start
+    data.push(b'S'); data.push(b'U'); data.push(4); data.extend_from_slice(b"rust");
+    data.push(b'S'); data.push(b'U'); data.push(4); data.extend_from_slice(b"json");
+    data.push(b']'); // Array end
+    
+    // Key "numbers"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(7); // length
+    data.extend_from_slice(b"numbers");
+    // Value: array [1, 2, 3]
+    data.push(b'['); // Array start
+    data.push(b'i'); data.push(1);
+    data.push(b'i'); data.push(2);
+    data.push(b'i'); data.push(3);
+    data.push(b']'); // Array end
+    
+    // Key "empty"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(5); // length
+    data.extend_from_slice(b"empty");
+    // Value: empty array
+    data.push(b'['); // Array start
+    data.push(b']'); // Array end
+    
+    data.push(b'}'); // Object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    let mut expected_map = std::collections::HashMap::new();
+    expected_map.insert("tags".to_string(), UbjsonValue::Array(vec![
+        UbjsonValue::String("rust".to_string()),
+        UbjsonValue::String("json".to_string()),
+    ]));
+    expected_map.insert("numbers".to_string(), UbjsonValue::Array(vec![
+        UbjsonValue::Int8(1),
+        UbjsonValue::Int8(2),
+        UbjsonValue::Int8(3),
+    ]));
+    expected_map.insert("empty".to_string(), UbjsonValue::Array(vec![]));
+    let expected = UbjsonValue::Object(expected_map);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_deserialize_object_level_4_nested_objects() {
+    // Level 4: Object containing nested objects
+    // {"user": {"name": "Bob", "age": 30}, "config": {"debug": false}}
+    let mut data = vec![b'{']; // Root object start
+    
+    // Key "user"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"user");
+    // Value: nested object
+    data.push(b'{'); // Nested object start
+    
+    // Key "name"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"name");
+    // Value "Bob"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(3); // length
+    data.extend_from_slice(b"Bob");
+    
+    // Key "age"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(3); // length
+    data.extend_from_slice(b"age");
+    // Value 30
+    data.push(b'i');
+    data.push(30);
+    
+    data.push(b'}'); // Nested object end
+    
+    // Key "config"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"config");
+    // Value: nested object
+    data.push(b'{'); // Nested object start
+    
+    // Key "debug"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(5); // length
+    data.extend_from_slice(b"debug");
+    // Value false
+    data.push(b'F');
+    
+    data.push(b'}'); // Nested object end
+    data.push(b'}'); // Root object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    let mut user_map = std::collections::HashMap::new();
+    user_map.insert("name".to_string(), UbjsonValue::String("Bob".to_string()));
+    user_map.insert("age".to_string(), UbjsonValue::Int8(30));
+    
+    let mut config_map = std::collections::HashMap::new();
+    config_map.insert("debug".to_string(), UbjsonValue::Bool(false));
+    
+    let mut expected_map = std::collections::HashMap::new();
+    expected_map.insert("user".to_string(), UbjsonValue::Object(user_map));
+    expected_map.insert("config".to_string(), UbjsonValue::Object(config_map));
+    let expected = UbjsonValue::Object(expected_map);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_deserialize_object_level_5_mixed_complex() {
+    // Level 5: Complex object with mixed nested structures
+    // {
+    //   "metadata": {"version": "1.0", "author": "test"},
+    //   "data": [{"id": 1, "values": [10, 20]}, {"id": 2, "values": []}],
+    //   "settings": {"enabled": true, "threshold": 0.95}
+    // }
+    let mut data = vec![b'{']; // Root object start
+    
+    // Key "metadata"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(8); // length
+    data.extend_from_slice(b"metadata");
+    // Value: nested object
+    data.push(b'{'); // Metadata object start
+    
+    // Key "version"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(7); // length
+    data.extend_from_slice(b"version");
+    // Value "1.0"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(3); // length
+    data.extend_from_slice(b"1.0");
+    
+    // Key "author"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"author");
+    // Value "test"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"test");
+    
+    data.push(b'}'); // Metadata object end
+    
+    // Key "data"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"data");
+    // Value: array of objects
+    data.push(b'['); // Data array start
+    
+    // First data object
+    data.push(b'{'); // Object start
+    
+    // Key "id"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(2); // length
+    data.extend_from_slice(b"id");
+    // Value 1
+    data.push(b'i');
+    data.push(1);
+    
+    // Key "values"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"values");
+    // Value: array [10, 20]
+    data.push(b'['); // Values array start
+    data.push(b'i'); data.push(10);
+    data.push(b'i'); data.push(20);
+    data.push(b']'); // Values array end
+    
+    data.push(b'}'); // First data object end
+    
+    // Second data object
+    data.push(b'{'); // Object start
+    
+    // Key "id"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(2); // length
+    data.extend_from_slice(b"id");
+    // Value 2
+    data.push(b'i');
+    data.push(2);
+    
+    // Key "values"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"values");
+    // Value: empty array
+    data.push(b'['); // Values array start
+    data.push(b']'); // Values array end
+    
+    data.push(b'}'); // Second data object end
+    data.push(b']'); // Data array end
+    
+    // Key "settings"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(8); // length
+    data.extend_from_slice(b"settings");
+    // Value: nested object
+    data.push(b'{'); // Settings object start
+    
+    // Key "enabled"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(7); // length
+    data.extend_from_slice(b"enabled");
+    // Value true
+    data.push(b'T');
+    
+    // Key "threshold"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(9); // length
+    data.extend_from_slice(b"threshold");
+    // Value 0.95 as float64
+    data.push(b'D');
+    data.extend_from_slice(&0.95f64.to_be_bytes());
+    
+    data.push(b'}'); // Settings object end
+    data.push(b'}'); // Root object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    // Build expected structure
+    let mut metadata_map = std::collections::HashMap::new();
+    metadata_map.insert("version".to_string(), UbjsonValue::String("1.0".to_string()));
+    metadata_map.insert("author".to_string(), UbjsonValue::String("test".to_string()));
+    
+    let mut data_obj1 = std::collections::HashMap::new();
+    data_obj1.insert("id".to_string(), UbjsonValue::Int8(1));
+    data_obj1.insert("values".to_string(), UbjsonValue::Array(vec![
+        UbjsonValue::Int8(10),
+        UbjsonValue::Int8(20),
+    ]));
+    
+    let mut data_obj2 = std::collections::HashMap::new();
+    data_obj2.insert("id".to_string(), UbjsonValue::Int8(2));
+    data_obj2.insert("values".to_string(), UbjsonValue::Array(vec![]));
+    
+    let mut settings_map = std::collections::HashMap::new();
+    settings_map.insert("enabled".to_string(), UbjsonValue::Bool(true));
+    settings_map.insert("threshold".to_string(), UbjsonValue::Float64(0.95));
+    
+    let mut expected_map = std::collections::HashMap::new();
+    expected_map.insert("metadata".to_string(), UbjsonValue::Object(metadata_map));
+    expected_map.insert("data".to_string(), UbjsonValue::Array(vec![
+        UbjsonValue::Object(data_obj1),
+        UbjsonValue::Object(data_obj2),
+    ]));
+    expected_map.insert("settings".to_string(), UbjsonValue::Object(settings_map));
+    let expected = UbjsonValue::Object(expected_map);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_deserialize_object_level_6_deeply_nested() {
+    // Level 6: Deeply nested object structure (4 levels deep)
+    // {"level1": {"level2": {"level3": {"level4": "deep_value"}}}}
+    let mut data = vec![b'{']; // Root object start
+    
+    // Key "level1"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"level1");
+    // Value: nested object
+    data.push(b'{'); // Level 1 object start
+    
+    // Key "level2"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"level2");
+    // Value: nested object
+    data.push(b'{'); // Level 2 object start
+    
+    // Key "level3"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"level3");
+    // Value: nested object
+    data.push(b'{'); // Level 3 object start
+    
+    // Key "level4"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"level4");
+    // Value "deep_value"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(10); // length
+    data.extend_from_slice(b"deep_value");
+    
+    data.push(b'}'); // Level 3 object end
+    data.push(b'}'); // Level 2 object end
+    data.push(b'}'); // Level 1 object end
+    data.push(b'}'); // Root object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    // Build expected nested structure
+    let mut level4_map = std::collections::HashMap::new();
+    level4_map.insert("level4".to_string(), UbjsonValue::String("deep_value".to_string()));
+    
+    let mut level3_map = std::collections::HashMap::new();
+    level3_map.insert("level3".to_string(), UbjsonValue::Object(level4_map));
+    
+    let mut level2_map = std::collections::HashMap::new();
+    level2_map.insert("level2".to_string(), UbjsonValue::Object(level3_map));
+    
+    let mut expected_map = std::collections::HashMap::new();
+    expected_map.insert("level1".to_string(), UbjsonValue::Object(level2_map));
+    let expected = UbjsonValue::Object(expected_map);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_deserialize_object_level_7_all_data_types() {
+    // Level 7: Object containing all supported UBJSON data types
+    // {
+    //   "null_val": null,
+    //   "bool_true": true,
+    //   "bool_false": false,
+    //   "int8_val": -42,
+    //   "uint8_val": 200,
+    //   "int16_val": -1000,
+    //   "int32_val": 123456,
+    //   "int64_val": -9876543210,
+    //   "float32_val": 3.14159,
+    //   "float64_val": 2.718281828459045,
+    //   "char_val": 'A',
+    //   "string_val": "Hello",
+    //   "high_precision": "123.456789012345678901234567890"
+    // }
+    let mut data = vec![b'{']; // Object start
+    
+    // null_val: null
+    data.push(b'S'); data.push(b'U'); data.push(8); data.extend_from_slice(b"null_val");
+    data.push(b'Z');
+    
+    // bool_true: true
+    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"bool_true");
+    data.push(b'T');
+    
+    // bool_false: false
+    data.push(b'S'); data.push(b'U'); data.push(10); data.extend_from_slice(b"bool_false");
+    data.push(b'F');
+    
+    // int8_val: -42
+    data.push(b'S'); data.push(b'U'); data.push(8); data.extend_from_slice(b"int8_val");
+    data.push(b'i'); data.push((-42i8) as u8);
+    
+    // uint8_val: 200
+    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"uint8_val");
+    data.push(b'U'); data.push(200);
+    
+    // int16_val: -1000
+    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"int16_val");
+    data.push(b'I'); data.extend_from_slice(&(-1000i16).to_be_bytes());
+    
+    // int32_val: 123456
+    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"int32_val");
+    data.push(b'l'); data.extend_from_slice(&123456i32.to_be_bytes());
+    
+    // int64_val: -9876543210
+    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"int64_val");
+    data.push(b'L'); data.extend_from_slice(&(-9876543210i64).to_be_bytes());
+    
+    // float32_val: 3.14159
+    data.push(b'S'); data.push(b'U'); data.push(11); data.extend_from_slice(b"float32_val");
+    data.push(b'd'); data.extend_from_slice(&3.14159f32.to_be_bytes());
+    
+    // float64_val: 2.718281828459045
+    data.push(b'S'); data.push(b'U'); data.push(11); data.extend_from_slice(b"float64_val");
+    data.push(b'D'); data.extend_from_slice(&2.718281828459045f64.to_be_bytes());
+    
+    // char_val: 'A'
+    data.push(b'S'); data.push(b'U'); data.push(8); data.extend_from_slice(b"char_val");
+    data.push(b'C'); data.push(b'A');
+    
+    // string_val: "Hello"
+    data.push(b'S'); data.push(b'U'); data.push(10); data.extend_from_slice(b"string_val");
+    data.push(b'S'); data.push(b'U'); data.push(5); data.extend_from_slice(b"Hello");
+    
+    // high_precision: "123.456789012345678901234567890"
+    let hp_str = "123.456789012345678901234567890";
+    data.push(b'S'); data.push(b'U'); data.push(14); data.extend_from_slice(b"high_precision");
+    data.push(b'H'); data.push(b'U'); data.push(hp_str.len() as u8); data.extend_from_slice(hp_str.as_bytes());
+    
+    data.push(b'}'); // Object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    let mut expected_map = std::collections::HashMap::new();
+    expected_map.insert("null_val".to_string(), UbjsonValue::Null);
+    expected_map.insert("bool_true".to_string(), UbjsonValue::Bool(true));
+    expected_map.insert("bool_false".to_string(), UbjsonValue::Bool(false));
+    expected_map.insert("int8_val".to_string(), UbjsonValue::Int8(-42));
+    expected_map.insert("uint8_val".to_string(), UbjsonValue::UInt8(200));
+    expected_map.insert("int16_val".to_string(), UbjsonValue::Int16(-1000));
+    expected_map.insert("int32_val".to_string(), UbjsonValue::Int32(123456));
+    expected_map.insert("int64_val".to_string(), UbjsonValue::Int64(-9876543210));
+    expected_map.insert("float32_val".to_string(), UbjsonValue::Float32(3.14159));
+    expected_map.insert("float64_val".to_string(), UbjsonValue::Float64(2.718281828459045));
+    expected_map.insert("char_val".to_string(), UbjsonValue::Char('A'));
+    expected_map.insert("string_val".to_string(), UbjsonValue::String("Hello".to_string()));
+    expected_map.insert("high_precision".to_string(), UbjsonValue::HighPrecision("123.456789012345678901234567890".to_string()));
+    let expected = UbjsonValue::Object(expected_map);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_deserialize_object_level_8_large_object() {
+    // Level 8: Large object with many keys (testing performance and memory usage)
+    let mut data = vec![b'{']; // Object start
+    let num_keys = 50;
+    
+    for i in 0..num_keys {
+        // Key: "key_XX"
+        let key = format!("key_{:02}", i);
+        data.push(b'S');
+        data.push(b'U');
+        data.push(key.len() as u8);
+        data.extend_from_slice(key.as_bytes());
+        
+        // Value: i as int8
+        data.push(b'i');
+        data.push(i as u8);
+    }
+    
+    data.push(b'}'); // Object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    if let UbjsonValue::Object(obj) = result {
+        assert_eq!(obj.len(), num_keys);
+        
+        // Verify a few specific keys
+        assert_eq!(obj.get("key_00"), Some(&UbjsonValue::Int8(0)));
+        assert_eq!(obj.get("key_25"), Some(&UbjsonValue::Int8(25)));
+        assert_eq!(obj.get("key_49"), Some(&UbjsonValue::Int8(49)));
+        
+        // Verify all keys are present
+        for i in 0..num_keys {
+            let key = format!("key_{:02}", i);
+            assert!(obj.contains_key(&key), "Missing key: {}", key);
+            assert_eq!(obj.get(&key), Some(&UbjsonValue::Int8(i as i8)));
+        }
+    } else {
+        panic!("Expected Object");
+    }
+}
+
+#[test]
+fn test_deserialize_object_with_unicode_keys() {
+    // Test object with Unicode keys and values
+    // {"名前": "田中", "年齢": 25, "🌟": "special"}
+    let mut data = vec![b'{']; // Object start
+    
+    // Key "名前" (name in Japanese)
+    let name_key = "名前";
+    let name_key_bytes = name_key.as_bytes();
+    data.push(b'S');
+    data.push(b'U');
+    data.push(name_key_bytes.len() as u8);
+    data.extend_from_slice(name_key_bytes);
+    // Value "田中"
+    let name_value = "田中";
+    let name_value_bytes = name_value.as_bytes();
+    data.push(b'S');
+    data.push(b'U');
+    data.push(name_value_bytes.len() as u8);
+    data.extend_from_slice(name_value_bytes);
+    
+    // Key "年齢" (age in Japanese)
+    let age_key = "年齢";
+    let age_key_bytes = age_key.as_bytes();
+    data.push(b'S');
+    data.push(b'U');
+    data.push(age_key_bytes.len() as u8);
+    data.extend_from_slice(age_key_bytes);
+    // Value 25
+    data.push(b'i');
+    data.push(25);
+    
+    // Key "🌟" (star emoji)
+    let star_key = "🌟";
+    let star_key_bytes = star_key.as_bytes();
+    data.push(b'S');
+    data.push(b'U');
+    data.push(star_key_bytes.len() as u8);
+    data.extend_from_slice(star_key_bytes);
+    // Value "special"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(7);
+    data.extend_from_slice(b"special");
+    
+    data.push(b'}'); // Object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    let mut expected_map = std::collections::HashMap::new();
+    expected_map.insert("名前".to_string(), UbjsonValue::String("田中".to_string()));
+    expected_map.insert("年齢".to_string(), UbjsonValue::Int8(25));
+    expected_map.insert("🌟".to_string(), UbjsonValue::String("special".to_string()));
+    let expected = UbjsonValue::Object(expected_map);
+    assert_eq!(result, expected);
+}
