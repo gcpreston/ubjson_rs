@@ -33,11 +33,13 @@
 
 pub mod encoding;
 pub mod error;
+pub mod serializer;
 pub mod types;
 pub mod value;
 
 // Re-export main types for convenience
 pub use error::UbjsonError;
+pub use serializer::UbjsonSerializer;
 pub use types::UbjsonType;
 pub use value::UbjsonValue;
 

@@ -14,7 +14,7 @@
   - Write unit tests for all encoding utilities
   - _Requirements: 1.2, 2.2, 4.3, 4.4, 4.5, 4.6_
 
-- [ ] 3. Implement basic value serialization
+- [x] 3. Implement basic value serialization
   - Create UbjsonSerializer struct with Write trait integration
   - Implement serialization for primitive types (null, bool, integers, floats)
   - Add string and character serialization with UTF-8 handling
