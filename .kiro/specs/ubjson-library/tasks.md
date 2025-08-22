@@ -7,7 +7,7 @@
   - Create basic error types using thiserror
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 6.1_
 
-- [ ] 2. Implement low-level binary encoding utilities
+- [x] 2. Implement low-level binary encoding utilities
   - Create functions for reading/writing UBJSON type markers
   - Implement length encoding/decoding for strings and containers
   - Add utilities for reading/writing integers in big-endian format

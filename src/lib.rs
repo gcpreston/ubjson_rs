@@ -31,6 +31,7 @@
 //! assert!(string_value.is_string());
 //! ```
 
+pub mod encoding;
 pub mod error;
 pub mod types;
 pub mod value;
