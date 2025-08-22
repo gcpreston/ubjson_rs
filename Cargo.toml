@@ -1,5 +1,5 @@
 [package]
-name = "ubjson_rs"
+name = "ubjson-rs"
 version = "0.1.0"
 edition = "2021"
 description = "A Rust library for reading and writing Universal Binary JSON (UBJSON) format"
