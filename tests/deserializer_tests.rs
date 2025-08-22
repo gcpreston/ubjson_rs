@@ -1230,3 +1230,217 @@ fn test_deserialize_object_with_unicode_keys() {
     let expected = UbjsonValue::Object(expected_map);
     assert_eq!(result, expected);
 }
+
+#[test]
+fn test_deserialize_object_with_binary_data_approaches() {
+    use std::collections::HashMap;
+    
+    // Approach 1: Array of UInt8 values (most straightforward)
+    // {"image_data": [255, 0, 171, 205], "format": "raw"}
+    let mut data = vec![b'{']; // Object start
+    
+    // Key "image_data"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(10); // length
+    data.extend_from_slice(b"image_data");
+    
+    // Value: array of bytes [255, 0, 171, 205]
+    data.push(b'['); // Array start
+    data.push(b'U'); data.push(255);  // UInt8(255)
+    data.push(b'U'); data.push(0);    // UInt8(0)
+    data.push(b'U'); data.push(171);  // UInt8(171)
+    data.push(b'U'); data.push(205);  // UInt8(205)
+    data.push(b']'); // Array end
+    
+    // Key "format"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"format");
+    
+    // Value "raw"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(3); // length
+    data.extend_from_slice(b"raw");
+    
+    data.push(b'}'); // Object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    let mut expected_map = HashMap::new();
+    expected_map.insert("image_data".to_string(), UbjsonValue::Array(vec![
+        UbjsonValue::UInt8(255),
+        UbjsonValue::UInt8(0),
+        UbjsonValue::UInt8(171),
+        UbjsonValue::UInt8(205),
+    ]));
+    expected_map.insert("format".to_string(), UbjsonValue::String("raw".to_string()));
+    let expected = UbjsonValue::Object(expected_map);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_deserialize_object_with_base64_binary_data() {
+    use std::collections::HashMap;
+    
+    // Approach 2: Base64 encoded binary data
+    // {"data": "/wCrzQ==", "encoding": "base64", "size": 4}
+    let mut data = vec![b'{']; // Object start
+    
+    // Key "data"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"data");
+    
+    // Value: Base64 string "/wCrzQ==" (represents [0xFF, 0x00, 0xAB, 0xCD])
+    let base64_data = "/wCrzQ==";
+    data.push(b'S');
+    data.push(b'U');
+    data.push(base64_data.len() as u8);
+    data.extend_from_slice(base64_data.as_bytes());
+    
+    // Key "encoding"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(8); // length
+    data.extend_from_slice(b"encoding");
+    
+    // Value "base64"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(6); // length
+    data.extend_from_slice(b"base64");
+    
+    // Key "size"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(4); // length
+    data.extend_from_slice(b"size");
+    
+    // Value 4 (original binary size)
+    data.push(b'i');
+    data.push(4);
+    
+    data.push(b'}'); // Object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    let mut expected_map = HashMap::new();
+    expected_map.insert("data".to_string(), UbjsonValue::String("/wCrzQ==".to_string()));
+    expected_map.insert("encoding".to_string(), UbjsonValue::String("base64".to_string()));
+    expected_map.insert("size".to_string(), UbjsonValue::Int8(4));
+    let expected = UbjsonValue::Object(expected_map);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_deserialize_object_with_hex_binary_data() {
+    use std::collections::HashMap;
+    
+    // Approach 3: Hexadecimal string representation
+    // {"checksum": "ff00abcd", "algorithm": "crc32"}
+    let mut data = vec![b'{']; // Object start
+    
+    // Key "checksum"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(8); // length
+    data.extend_from_slice(b"checksum");
+    
+    // Value: Hex string "ff00abcd"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(8); // length
+    data.extend_from_slice(b"ff00abcd");
+    
+    // Key "algorithm"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(9); // length
+    data.extend_from_slice(b"algorithm");
+    
+    // Value "crc32"
+    data.push(b'S');
+    data.push(b'U');
+    data.push(5); // length
+    data.extend_from_slice(b"crc32");
+    
+    data.push(b'}'); // Object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    let mut expected_map = HashMap::new();
+    expected_map.insert("checksum".to_string(), UbjsonValue::String("ff00abcd".to_string()));
+    expected_map.insert("algorithm".to_string(), UbjsonValue::String("crc32".to_string()));
+    let expected = UbjsonValue::Object(expected_map);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_binary_data_real_world_example() {
+    use std::collections::HashMap;
+    
+    // Real-world example: Image metadata with thumbnail data
+    // {
+    //   "filename": "photo.jpg",
+    //   "width": 1920,
+    //   "height": 1080,
+    //   "thumbnail": [255, 216, 255, 224, 0, 16], // JPEG header bytes
+    //   "thumbnail_format": "jpeg"
+    // }
+    let mut data = vec![b'{']; // Object start
+    
+    // filename
+    data.push(b'S'); data.push(b'U'); data.push(8); data.extend_from_slice(b"filename");
+    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"photo.jpg");
+    
+    // width
+    data.push(b'S'); data.push(b'U'); data.push(5); data.extend_from_slice(b"width");
+    data.push(b'I'); data.extend_from_slice(&1920i16.to_be_bytes());
+    
+    // height
+    data.push(b'S'); data.push(b'U'); data.push(6); data.extend_from_slice(b"height");
+    data.push(b'I'); data.extend_from_slice(&1080i16.to_be_bytes());
+    
+    // thumbnail (JPEG header bytes: FF D8 FF E0 00 10)
+    data.push(b'S'); data.push(b'U'); data.push(9); data.extend_from_slice(b"thumbnail");
+    data.push(b'['); // Array start
+    data.push(b'U'); data.push(255); // 0xFF
+    data.push(b'U'); data.push(216); // 0xD8
+    data.push(b'U'); data.push(255); // 0xFF
+    data.push(b'U'); data.push(224); // 0xE0
+    data.push(b'U'); data.push(0);   // 0x00
+    data.push(b'U'); data.push(16);  // 0x10
+    data.push(b']'); // Array end
+    
+    // thumbnail_format
+    data.push(b'S'); data.push(b'U'); data.push(16); data.extend_from_slice(b"thumbnail_format");
+    data.push(b'S'); data.push(b'U'); data.push(4); data.extend_from_slice(b"jpeg");
+    
+    data.push(b'}'); // Object end
+    
+    let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+    let result = deserializer.deserialize_value().unwrap();
+    
+    let mut expected_map = HashMap::new();
+    expected_map.insert("filename".to_string(), UbjsonValue::String("photo.jpg".to_string()));
+    expected_map.insert("width".to_string(), UbjsonValue::Int16(1920));
+    expected_map.insert("height".to_string(), UbjsonValue::Int16(1080));
+    expected_map.insert("thumbnail".to_string(), UbjsonValue::Array(vec![
+        UbjsonValue::UInt8(255), // 0xFF
+        UbjsonValue::UInt8(216), // 0xD8
+        UbjsonValue::UInt8(255), // 0xFF
+        UbjsonValue::UInt8(224), // 0xE0
+        UbjsonValue::UInt8(0),   // 0x00
+        UbjsonValue::UInt8(16),  // 0x10
+    ]));
+    expected_map.insert("thumbnail_format".to_string(), UbjsonValue::String("jpeg".to_string()));
+    let expected = UbjsonValue::Object(expected_map);
+    assert_eq!(result, expected);
+}
