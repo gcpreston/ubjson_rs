@@ -1,6 +1,20 @@
 [package]
 name = "ubjson_rs"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "A Rust library for reading and writing Universal Binary JSON (UBJSON) format"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/example/ubjson_rs"
+keywords = ["ubjson", "json", "binary", "serialization"]
+categories = ["encoding", "data-structures"]
 
 [dependencies]
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+
+[dev-dependencies]
+serde_json = "1.0"
