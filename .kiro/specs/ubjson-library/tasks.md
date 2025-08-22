@@ -21,7 +21,7 @@
   - Write unit tests for primitive type serialization
   - _Requirements: 1.1, 1.2, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7_
 
-- [ ] 4. Implement basic value deserialization
+- [x] 4. Implement basic value deserialization
   - Create UbjsonDeserializer struct with Read trait integration
   - Implement deserialization for primitive types with proper error handling
   - Add string parsing with UTF-8 validation

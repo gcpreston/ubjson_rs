@@ -31,6 +31,7 @@
 //! assert!(string_value.is_string());
 //! ```
 
+pub mod deserializer;
 pub mod encoding;
 pub mod error;
 pub mod serializer;
@@ -38,6 +39,7 @@ pub mod types;
 pub mod value;
 
 // Re-export main types for convenience
+pub use deserializer::UbjsonDeserializer;
 pub use error::UbjsonError;
 pub use serializer::UbjsonSerializer;
 pub use types::UbjsonType;
