@@ -222,7 +222,7 @@ impl<W: Write> UbjsonSerializer<W> {
         
         // Serialize each key-value pair
         for (key, value) in object {
-            // Write the key as a raw string (without 'S' marker per UBJSON spec)
+            // Write the key as a string without type marker (compact string format)
             write_string(&mut self.writer, key)?;
             // Write the value
             self.serialize_value(value)?;
@@ -318,10 +318,10 @@ impl<W: Write> UbjsonSerializer<W> {
         // Write the element type
         write_type_marker(&mut self.writer, element_type)?;
         
-        // Write count optimization if provided
-        if let Some(count) = count {
+        // Write count optimization if provided (use actual elements length)
+        if let Some(_) = count {
             self.writer.write_all(&[COUNT_MARKER])?;
-            write_length(&mut self.writer, count)?;
+            write_length(&mut self.writer, elements.len())?;
         }
         
         // Increase depth for nested serialization
@@ -364,10 +364,10 @@ impl<W: Write> UbjsonSerializer<W> {
         // Write the value type
         write_type_marker(&mut self.writer, value_type)?;
         
-        // Write count optimization if provided
-        if let Some(count) = count {
+        // Write count optimization if provided (use actual pairs length)
+        if let Some(_) = count {
             self.writer.write_all(&[COUNT_MARKER])?;
-            write_length(&mut self.writer, count)?;
+            write_length(&mut self.writer, pairs.len())?;
         }
         
         // Increase depth for nested serialization
@@ -375,7 +375,7 @@ impl<W: Write> UbjsonSerializer<W> {
         
         // Serialize key-value pairs without value type markers
         for (key, value) in pairs {
-            // Write the key as a raw string (without 'S' marker per UBJSON spec)
+            // Write the key as a string without type marker (compact string format)
             write_string(&mut self.writer, key)?;
             // Write the value without type marker (since type is already specified)
             self.serialize_value_without_type_marker(value, value_type)?;
