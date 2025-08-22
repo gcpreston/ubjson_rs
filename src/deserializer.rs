@@ -119,7 +119,7 @@ impl<R: Read> UbjsonDeserializer<R> {
         }
     }
 
-    /// Deserialize a standard array from the reader.
+    /// Deserialize an array from the reader (standard or optimized).
     fn deserialize_array(&mut self) -> Result<UbjsonValue> {
         // Increment depth and check limit
         self.current_depth += 1;
@@ -128,14 +128,49 @@ impl<R: Read> UbjsonDeserializer<R> {
             return Err(UbjsonError::DepthLimitExceeded(self.max_depth));
         }
 
+        // Check if this is an optimized array by looking for the '$' type marker
+        let mut buffer = [0u8; 1];
+        self.reader.read_exact(&mut buffer)?;
+        let next_byte = buffer[0];
+        
+        if next_byte == crate::types::optimization::TYPE_MARKER {
+            // This is a strongly-typed array
+            let result = self.deserialize_strongly_typed_array();
+            self.current_depth -= 1;
+            result
+        } else {
+            // This is a standard array, process the first element we already read
+            let first_marker = UbjsonType::from_byte(next_byte)?;
+            let result = self.deserialize_standard_array_with_first_element(first_marker);
+            self.current_depth -= 1;
+            result
+        }
+    }
+
+    /// Deserialize a standard array when we've already read the first element's type marker.
+    fn deserialize_standard_array_with_first_element(&mut self, first_marker: UbjsonType) -> Result<UbjsonValue> {
         let mut elements = Vec::new();
         let mut element_count = 0;
 
-        // Read elements until we encounter the array end marker
+        // Handle the first element we already read
+        if first_marker != UbjsonType::ArrayEnd {
+            // Check size limit
+            if element_count >= self.max_size {
+                return Err(UbjsonError::SizeLimitExceeded(self.max_size));
+            }
+
+            let element = self.deserialize_value_with_type(first_marker)?;
+            elements.push(element);
+            element_count += 1;
+        } else {
+            // Empty array
+            return Ok(UbjsonValue::Array(elements));
+        }
+
+        // Read remaining elements until we encounter the array end marker
         loop {
             // Check size limit before reading each element
             if element_count >= self.max_size {
-                self.current_depth -= 1;
                 return Err(UbjsonError::SizeLimitExceeded(self.max_size));
             }
 
@@ -151,11 +186,113 @@ impl<R: Read> UbjsonDeserializer<R> {
             element_count += 1;
         }
 
-        self.current_depth -= 1;
         Ok(UbjsonValue::Array(elements))
     }
 
-    /// Deserialize a standard object from the reader.
+    /// Deserialize a strongly-typed array.
+    fn deserialize_strongly_typed_array(&mut self) -> Result<UbjsonValue> {
+        // Read the element type
+        let element_type = read_type_marker(&mut self.reader)?;
+        
+        // Validate that the element type is a primitive type
+        if !element_type.is_primitive() {
+            return Err(UbjsonError::invalid_format(format!(
+                "Strongly-typed arrays can only contain primitive types, found: {}",
+                element_type
+            )));
+        }
+
+        // Check if there's a count marker
+        let mut buffer = [0u8; 1];
+        self.reader.read_exact(&mut buffer)?;
+        let next_byte = buffer[0];
+        let (count, has_count) = if next_byte == crate::types::optimization::COUNT_MARKER {
+            // Read the count
+            let count = crate::encoding::read_length(&mut self.reader)?;
+            (Some(count), true)
+        } else {
+            // No count, put back the marker and read elements until end
+            // We need to handle this differently since we can't "put back" a byte
+            // Instead, we'll process this as the first element
+            (None, false)
+        };
+
+        let mut elements = Vec::new();
+
+        if let Some(expected_count) = count {
+            // We have a count, read exactly that many elements
+            if expected_count > self.max_size {
+                return Err(UbjsonError::SizeLimitExceeded(self.max_size));
+            }
+
+            for _ in 0..expected_count {
+                let element = self.deserialize_raw_value(element_type)?;
+                elements.push(element);
+            }
+
+            // Read the array end marker
+            let end_marker = read_type_marker(&mut self.reader)?;
+            if end_marker != UbjsonType::ArrayEnd {
+                return Err(UbjsonError::invalid_format(format!(
+                    "Expected array end marker, found: {}",
+                    end_marker
+                )));
+            }
+        } else {
+            // No count, read elements until array end marker
+            // First, handle the marker we already read
+            if next_byte != UbjsonType::ArrayEnd.to_byte() {
+                let first_marker = UbjsonType::from_byte(next_byte)?;
+                let element = self.deserialize_value_with_type(first_marker)?;
+                // Validate that the element matches the expected type
+                if element.get_type() != element_type {
+                    return Err(UbjsonError::invalid_format(format!(
+                        "Element type mismatch in strongly-typed array: expected {}, found {}",
+                        element_type, element.get_type()
+                    )));
+                }
+                elements.push(element);
+            } else {
+                // Empty strongly-typed array
+                return Ok(UbjsonValue::StronglyTypedArray {
+                    element_type,
+                    count: Some(0),
+                    elements,
+                });
+            }
+
+            // Read remaining elements
+            loop {
+                if elements.len() >= self.max_size {
+                    return Err(UbjsonError::SizeLimitExceeded(self.max_size));
+                }
+
+                let type_marker = read_type_marker(&mut self.reader)?;
+                
+                if type_marker == UbjsonType::ArrayEnd {
+                    break;
+                }
+
+                let element = self.deserialize_value_with_type(type_marker)?;
+                // Validate that the element matches the expected type
+                if element.get_type() != element_type {
+                    return Err(UbjsonError::invalid_format(format!(
+                        "Element type mismatch in strongly-typed array: expected {}, found {}",
+                        element_type, element.get_type()
+                    )));
+                }
+                elements.push(element);
+            }
+        }
+
+        Ok(UbjsonValue::StronglyTypedArray {
+            element_type,
+            count: if has_count { Some(elements.len()) } else { None },
+            elements,
+        })
+    }
+
+    /// Deserialize an object from the reader (standard or optimized).
     fn deserialize_object(&mut self) -> Result<UbjsonValue> {
         // Increment depth and check limit
         self.current_depth += 1;
@@ -164,14 +301,61 @@ impl<R: Read> UbjsonDeserializer<R> {
             return Err(UbjsonError::DepthLimitExceeded(self.max_depth));
         }
 
+        // Check if this is an optimized object by looking for the '$' type marker
+        let mut buffer = [0u8; 1];
+        self.reader.read_exact(&mut buffer)?;
+        let next_byte = buffer[0];
+        
+        if next_byte == crate::types::optimization::TYPE_MARKER {
+            // This is a strongly-typed object
+            let result = self.deserialize_strongly_typed_object();
+            self.current_depth -= 1;
+            result
+        } else {
+            // This is a standard object, process the first key we already read
+            let first_marker = UbjsonType::from_byte(next_byte)?;
+            let result = self.deserialize_standard_object_with_first_key(first_marker);
+            self.current_depth -= 1;
+            result
+        }
+    }
+
+    /// Deserialize a standard object when we've already read the first key's type marker.
+    fn deserialize_standard_object_with_first_key(&mut self, first_marker: UbjsonType) -> Result<UbjsonValue> {
         let mut pairs = std::collections::HashMap::new();
         let mut pair_count = 0;
 
-        // Read key-value pairs until we encounter the object end marker
+        // Handle the first key we already read
+        if first_marker != UbjsonType::ObjectEnd {
+            // Check size limit
+            if pair_count >= self.max_size {
+                return Err(UbjsonError::SizeLimitExceeded(self.max_size));
+            }
+
+            // Keys must be strings in UBJSON objects
+            if first_marker != UbjsonType::String {
+                return Err(UbjsonError::invalid_format(format!(
+                    "Object keys must be strings, found: {}",
+                    first_marker
+                )));
+            }
+
+            // Read the key string
+            let key = crate::encoding::read_string(&mut self.reader)?;
+
+            // Read the value
+            let value = self.deserialize_value()?;
+            pairs.insert(key, value);
+            pair_count += 1;
+        } else {
+            // Empty object
+            return Ok(UbjsonValue::Object(pairs));
+        }
+
+        // Read remaining key-value pairs until we encounter the object end marker
         loop {
             // Check size limit before reading each pair
             if pair_count >= self.max_size {
-                self.current_depth -= 1;
                 return Err(UbjsonError::SizeLimitExceeded(self.max_size));
             }
 
@@ -183,7 +367,6 @@ impl<R: Read> UbjsonDeserializer<R> {
 
             // Keys must be strings in UBJSON objects
             if type_marker != UbjsonType::String {
-                self.current_depth -= 1;
                 return Err(UbjsonError::invalid_format(format!(
                     "Object keys must be strings, found: {}",
                     type_marker
@@ -191,11 +374,10 @@ impl<R: Read> UbjsonDeserializer<R> {
             }
 
             // Read the key string
-            let key = read_string(&mut self.reader)?;
+            let key = crate::encoding::read_string(&mut self.reader)?;
 
             // Check for duplicate keys
             if pairs.contains_key(&key) {
-                self.current_depth -= 1;
                 return Err(UbjsonError::invalid_format(format!(
                     "Duplicate key in object: '{}'",
                     key
@@ -208,8 +390,143 @@ impl<R: Read> UbjsonDeserializer<R> {
             pair_count += 1;
         }
 
-        self.current_depth -= 1;
         Ok(UbjsonValue::Object(pairs))
+    }
+
+    /// Deserialize a strongly-typed object.
+    fn deserialize_strongly_typed_object(&mut self) -> Result<UbjsonValue> {
+        // Read the value type
+        let value_type = read_type_marker(&mut self.reader)?;
+        
+        // Validate that the value type is a primitive type
+        if !value_type.is_primitive() {
+            return Err(UbjsonError::invalid_format(format!(
+                "Strongly-typed objects can only contain primitive value types, found: {}",
+                value_type
+            )));
+        }
+
+        // Check if there's a count marker
+        let mut buffer = [0u8; 1];
+        self.reader.read_exact(&mut buffer)?;
+        let next_byte = buffer[0];
+        let (count, has_count) = if next_byte == crate::types::optimization::COUNT_MARKER {
+            // Read the count
+            let count = crate::encoding::read_length(&mut self.reader)?;
+            (Some(count), true)
+        } else {
+            // No count, put back the marker and read pairs until end
+            (None, false)
+        };
+
+        let mut pairs = std::collections::HashMap::new();
+
+        if let Some(expected_count) = count {
+            // We have a count, read exactly that many key-value pairs
+            if expected_count > self.max_size {
+                return Err(UbjsonError::SizeLimitExceeded(self.max_size));
+            }
+
+            for _ in 0..expected_count {
+                // Read the key (must be a string)
+                let key_marker = read_type_marker(&mut self.reader)?;
+                if key_marker != UbjsonType::String {
+                    return Err(UbjsonError::invalid_format(format!(
+                        "Object keys must be strings, found: {}",
+                        key_marker
+                    )));
+                }
+                let key = crate::encoding::read_string(&mut self.reader)?;
+
+                // Check for duplicate keys
+                if pairs.contains_key(&key) {
+                    return Err(UbjsonError::invalid_format(format!(
+                        "Duplicate key in object: '{}'",
+                        key
+                    )));
+                }
+
+                // Read the value with the expected type (raw value without type marker)
+                let value = self.deserialize_raw_value(value_type)?;
+                pairs.insert(key, value);
+            }
+
+            // Read the object end marker
+            let end_marker = read_type_marker(&mut self.reader)?;
+            if end_marker != UbjsonType::ObjectEnd {
+                return Err(UbjsonError::invalid_format(format!(
+                    "Expected object end marker, found: {}",
+                    end_marker
+                )));
+            }
+        } else {
+            // No count, read pairs until object end marker
+            // First, handle the marker we already read
+            if next_byte != UbjsonType::ObjectEnd.to_byte() {
+                // This should be a string key
+                let first_marker = UbjsonType::from_byte(next_byte)?;
+                if first_marker != UbjsonType::String {
+                    return Err(UbjsonError::invalid_format(format!(
+                        "Object keys must be strings, found: {}",
+                        first_marker
+                    )));
+                }
+                let key = crate::encoding::read_string(&mut self.reader)?;
+
+                // Read the value with the expected type (raw value without type marker)
+                let value = self.deserialize_raw_value(value_type)?;
+                pairs.insert(key, value);
+            } else {
+                // Empty strongly-typed object
+                return Ok(UbjsonValue::StronglyTypedObject {
+                    value_type,
+                    count: Some(0),
+                    pairs,
+                });
+            }
+
+            // Read remaining key-value pairs
+            loop {
+                if pairs.len() >= self.max_size {
+                    return Err(UbjsonError::SizeLimitExceeded(self.max_size));
+                }
+
+                let type_marker = read_type_marker(&mut self.reader)?;
+                
+                if type_marker == UbjsonType::ObjectEnd {
+                    break;
+                }
+
+                // Keys must be strings in UBJSON objects
+                if type_marker != UbjsonType::String {
+                    return Err(UbjsonError::invalid_format(format!(
+                        "Object keys must be strings, found: {}",
+                        type_marker
+                    )));
+                }
+
+                // Read the key string
+                let key = crate::encoding::read_string(&mut self.reader)?;
+
+                // Check for duplicate keys
+                if pairs.contains_key(&key) {
+                    return Err(UbjsonError::invalid_format(format!(
+                        "Duplicate key in object: '{}'",
+                        key
+                    )));
+                }
+
+                // Read the value with the expected type (raw value without type marker)
+                let value = self.deserialize_raw_value(value_type)?;
+                pairs.insert(key, value);
+            }
+        }
+
+        Ok(UbjsonValue::StronglyTypedObject {
+            value_type,
+            count: if has_count { Some(pairs.len()) } else { None },
+            pairs,
+        })
     }
 
     /// Validate that a high-precision number string is valid.
@@ -293,6 +610,62 @@ impl<R: Read> UbjsonDeserializer<R> {
     /// Get the maximum allowed container size.
     pub fn max_size(&self) -> usize {
         self.max_size
+    }
+
+    /// Deserialize a raw value of the specified type (without type marker).
+    /// This is used for strongly-typed containers where the type is already known.
+    fn deserialize_raw_value(&mut self, value_type: UbjsonType) -> Result<UbjsonValue> {
+        match value_type {
+            UbjsonType::Null => Ok(UbjsonValue::Null),
+            UbjsonType::True => Ok(UbjsonValue::Bool(true)),
+            UbjsonType::False => Ok(UbjsonValue::Bool(false)),
+            UbjsonType::Int8 => {
+                let value = read_int8(&mut self.reader)?;
+                Ok(UbjsonValue::Int8(value))
+            }
+            UbjsonType::UInt8 => {
+                let value = read_uint8(&mut self.reader)?;
+                Ok(UbjsonValue::UInt8(value))
+            }
+            UbjsonType::Int16 => {
+                let value = read_int16(&mut self.reader)?;
+                Ok(UbjsonValue::Int16(value))
+            }
+            UbjsonType::Int32 => {
+                let value = read_int32(&mut self.reader)?;
+                Ok(UbjsonValue::Int32(value))
+            }
+            UbjsonType::Int64 => {
+                let value = read_int64(&mut self.reader)?;
+                Ok(UbjsonValue::Int64(value))
+            }
+            UbjsonType::Float32 => {
+                let value = read_float32(&mut self.reader)?;
+                Ok(UbjsonValue::Float32(value))
+            }
+            UbjsonType::Float64 => {
+                let value = read_float64(&mut self.reader)?;
+                Ok(UbjsonValue::Float64(value))
+            }
+            UbjsonType::HighPrecision => {
+                let value = read_string(&mut self.reader)?;
+                // Validate that the string represents a valid number
+                self.validate_high_precision_number(&value)?;
+                Ok(UbjsonValue::HighPrecision(value))
+            }
+            UbjsonType::Char => {
+                let value = read_char(&mut self.reader)?;
+                Ok(UbjsonValue::Char(value))
+            }
+            UbjsonType::String => {
+                let value = read_string(&mut self.reader)?;
+                Ok(UbjsonValue::String(value))
+            }
+            _ => Err(UbjsonError::invalid_format(format!(
+                "Cannot deserialize raw value for non-primitive type: {}",
+                value_type
+            ))),
+        }
     }
 }
 
@@ -850,17 +1223,16 @@ mod tests {
 
     #[test]
     fn test_object_size_limit() {
-        // Create object with too many key-value pairs
+        // Create object with too many pairs
         let mut data = vec![b'{']; // Object start
         
-        let size_limit = 2;
+        let size_limit = 3;
         for i in 0..size_limit + 1 {
             // Key
             data.push(b'S');
             data.push(b'U');
-            data.push(4); // length (corrected)
-            data.extend_from_slice(b"key");
-            data.push(b'0' + i as u8); // Make keys unique: "key0", "key1", etc.
+            data.push(1); // key length
+            data.push(b'a' + i as u8); // key: "a", "b", "c", etc.
             
             // Value
             data.push(b'i');
@@ -871,11 +1243,444 @@ mod tests {
         let mut deserializer = UbjsonDeserializer::with_limits(Cursor::new(data), 1000, size_limit);
         let result = deserializer.deserialize_value();
         assert!(result.is_err());
-        match result.unwrap_err() {
-            UbjsonError::SizeLimitExceeded(_) => {}, // Expected
-            other => panic!("Expected SizeLimitExceeded, got: {:?}", other),
-        }
+        assert!(matches!(result.unwrap_err(), UbjsonError::SizeLimitExceeded(_)));
     }
+
+    // Tests for optimized container deserialization
+
+    #[test]
+    fn test_deserialize_strongly_typed_array_with_count() {
+        // Strongly-typed array of int8 with count: [$i#U3i1i2i3]
+        let data = vec![
+            b'[',           // Array start
+            b'$',           // Type marker
+            b'i',           // Element type: int8
+            b'#',           // Count marker
+            b'U', 3,        // Count: 3 (as uint8)
+            1, 2, 3,        // Elements: 1, 2, 3 (raw int8 values)
+            b']',           // Array end
+        ];
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value().unwrap();
+        
+        let expected = UbjsonValue::StronglyTypedArray {
+            element_type: UbjsonType::Int8,
+            count: Some(3),
+            elements: vec![
+                UbjsonValue::Int8(1),
+                UbjsonValue::Int8(2),
+                UbjsonValue::Int8(3),
+            ],
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_deserialize_strongly_typed_array_without_count() {
+        // Strongly-typed array of int8 without count: [$ii1i2i3]
+        let data = vec![
+            b'[',           // Array start
+            b'$',           // Type marker
+            b'i',           // Element type: int8
+            b'i', 1,        // First element: int8(1)
+            b'i', 2,        // Second element: int8(2)
+            b'i', 3,        // Third element: int8(3)
+            b']',           // Array end
+        ];
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value().unwrap();
+        
+        let expected = UbjsonValue::StronglyTypedArray {
+            element_type: UbjsonType::Int8,
+            count: None,
+            elements: vec![
+                UbjsonValue::Int8(1),
+                UbjsonValue::Int8(2),
+                UbjsonValue::Int8(3),
+            ],
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_deserialize_empty_strongly_typed_array_with_count() {
+        // Empty strongly-typed array with count: [$i#U0]
+        let data = vec![
+            b'[',           // Array start
+            b'$',           // Type marker
+            b'i',           // Element type: int8
+            b'#',           // Count marker
+            b'U', 0,        // Count: 0 (as uint8)
+            b']',           // Array end
+        ];
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value().unwrap();
+        
+        let expected = UbjsonValue::StronglyTypedArray {
+            element_type: UbjsonType::Int8,
+            count: Some(0),
+            elements: vec![],
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_deserialize_empty_strongly_typed_array_without_count() {
+        // Empty strongly-typed array without count: [$i]
+        let data = vec![
+            b'[',           // Array start
+            b'$',           // Type marker
+            b'i',           // Element type: int8
+            b']',           // Array end (immediately)
+        ];
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value().unwrap();
+        
+        let expected = UbjsonValue::StronglyTypedArray {
+            element_type: UbjsonType::Int8,
+            count: Some(0),
+            elements: vec![],
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_deserialize_strongly_typed_array_different_types() {
+        // Test with different primitive types
+        
+        // String array: [$S#U2U4testU5hello]
+        let mut data = vec![
+            b'[',           // Array start
+            b'$',           // Type marker
+            b'S',           // Element type: string
+            b'#',           // Count marker
+            b'U', 2,        // Count: 2
+        ];
+        
+        // First string: "test" (length + data, no type marker)
+        data.push(b'U');
+        data.push(4);
+        data.extend_from_slice(b"test");
+        
+        // Second string: "hello" (length + data, no type marker)
+        data.push(b'U');
+        data.push(5);
+        data.extend_from_slice(b"hello");
+        
+        data.push(b']'); // Array end
+        
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value().unwrap();
+        
+        let expected = UbjsonValue::StronglyTypedArray {
+            element_type: UbjsonType::String,
+            count: Some(2),
+            elements: vec![
+                UbjsonValue::String("test".to_string()),
+                UbjsonValue::String("hello".to_string()),
+            ],
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_deserialize_strongly_typed_object_with_count() {
+        // Strongly-typed object with int8 values and count: {$i#U2SU1ai1SU1bi2}
+        let mut data = vec![
+            b'{',           // Object start
+            b'$',           // Type marker
+            b'i',           // Value type: int8
+            b'#',           // Count marker
+            b'U', 2,        // Count: 2 (as uint8)
+        ];
+        
+        // First pair: "a": 1
+        data.push(b'S');
+        data.push(b'U');
+        data.push(1);
+        data.push(b'a');
+        data.push(1); // int8 value
+        
+        // Second pair: "b": 2
+        data.push(b'S');
+        data.push(b'U');
+        data.push(1);
+        data.push(b'b');
+        data.push(2); // int8 value
+        
+        data.push(b'}'); // Object end
+        
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value().unwrap();
+        
+        let mut expected_pairs = std::collections::HashMap::new();
+        expected_pairs.insert("a".to_string(), UbjsonValue::Int8(1));
+        expected_pairs.insert("b".to_string(), UbjsonValue::Int8(2));
+        
+        let expected = UbjsonValue::StronglyTypedObject {
+            value_type: UbjsonType::Int8,
+            count: Some(2),
+            pairs: expected_pairs,
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_deserialize_strongly_typed_object_without_count() {
+        // Strongly-typed object without count: {$iSU1ai1SU1bi2}
+        let mut data = vec![
+            b'{',           // Object start
+            b'$',           // Type marker
+            b'i',           // Value type: int8
+        ];
+        
+        // First pair: "a": 1
+        data.push(b'S');
+        data.push(b'U');
+        data.push(1);
+        data.push(b'a');
+        data.push(1);    // int8 value (raw, no type marker)
+        
+        // Second pair: "b": 2
+        data.push(b'S');
+        data.push(b'U');
+        data.push(1);
+        data.push(b'b');
+        data.push(2);    // int8 value (raw, no type marker)
+        
+        data.push(b'}'); // Object end
+        
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value().unwrap();
+        
+        let mut expected_pairs = std::collections::HashMap::new();
+        expected_pairs.insert("a".to_string(), UbjsonValue::Int8(1));
+        expected_pairs.insert("b".to_string(), UbjsonValue::Int8(2));
+        
+        let expected = UbjsonValue::StronglyTypedObject {
+            value_type: UbjsonType::Int8,
+            count: None,
+            pairs: expected_pairs,
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_deserialize_empty_strongly_typed_object_with_count() {
+        // Empty strongly-typed object with count: {$i#U0}
+        let data = vec![
+            b'{',           // Object start
+            b'$',           // Type marker
+            b'i',           // Value type: int8
+            b'#',           // Count marker
+            b'U', 0,        // Count: 0 (as uint8)
+            b'}',           // Object end
+        ];
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value().unwrap();
+        
+        let expected = UbjsonValue::StronglyTypedObject {
+            value_type: UbjsonType::Int8,
+            count: Some(0),
+            pairs: std::collections::HashMap::new(),
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_deserialize_empty_strongly_typed_object_without_count() {
+        // Empty strongly-typed object without count: {$i}
+        let data = vec![
+            b'{',           // Object start
+            b'$',           // Type marker
+            b'i',           // Value type: int8
+            b'}',           // Object end (immediately)
+        ];
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value().unwrap();
+        
+        let expected = UbjsonValue::StronglyTypedObject {
+            value_type: UbjsonType::Int8,
+            count: Some(0),
+            pairs: std::collections::HashMap::new(),
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_strongly_typed_array_invalid_element_type() {
+        // Try to create strongly-typed array with container type (invalid)
+        let data = vec![
+            b'[',           // Array start
+            b'$',           // Type marker
+            b'[',           // Element type: array (invalid for strongly-typed)
+            b']',           // Array end
+        ];
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), UbjsonError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn test_strongly_typed_object_invalid_value_type() {
+        // Try to create strongly-typed object with container type (invalid)
+        let data = vec![
+            b'{',           // Object start
+            b'$',           // Type marker
+            b'{',           // Value type: object (invalid for strongly-typed)
+            b'}',           // Object end
+        ];
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), UbjsonError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn test_strongly_typed_array_element_type_mismatch() {
+        // Strongly-typed array with mismatched element type
+        let data = vec![
+            b'[',           // Array start
+            b'$',           // Type marker
+            b'i',           // Element type: int8
+            b'S',           // But provide string element (mismatch)
+            b'U', 4,
+            b't', b'e', b's', b't',
+            b']',           // Array end
+        ];
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), UbjsonError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn test_strongly_typed_object_value_type_mismatch() {
+        // Strongly-typed object with mismatched value type
+        let mut data = vec![
+            b'{',           // Object start
+            b'$',           // Type marker
+            b'i',           // Value type: int8
+        ];
+        
+        // Key: "test"
+        data.push(b'S');
+        data.push(b'U');
+        data.push(4);
+        data.extend_from_slice(b"test");
+        
+        // Value: string instead of int8 (mismatch)
+        data.push(b'S');
+        data.push(b'U');
+        data.push(5);
+        data.extend_from_slice(b"hello");
+        
+        data.push(b'}'); // Object end
+        
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), UbjsonError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn test_strongly_typed_object_duplicate_key() {
+        // Strongly-typed object with duplicate key
+        let mut data = vec![
+            b'{',           // Object start
+            b'$',           // Type marker
+            b'i',           // Value type: int8
+            b'#',           // Count marker
+            b'U', 2,        // Count: 2
+        ];
+        
+        // First pair: "key": 1
+        data.push(b'S');
+        data.push(b'U');
+        data.push(3);
+        data.extend_from_slice(b"key");
+        data.push(1); // int8 value
+        
+        // Second pair: "key": 2 (duplicate)
+        data.push(b'S');
+        data.push(b'U');
+        data.push(3);
+        data.extend_from_slice(b"key");
+        data.push(2); // int8 value
+        
+        data.push(b'}'); // Object end
+        
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), UbjsonError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn test_strongly_typed_object_non_string_key() {
+        // Strongly-typed object with non-string key
+        let data = vec![
+            b'{',           // Object start
+            b'$',           // Type marker
+            b'i',           // Value type: int8
+            b'i', 42,       // int8(42) as key (invalid)
+            1,              // int8 value
+            b'}',           // Object end
+        ];
+        let mut deserializer = UbjsonDeserializer::new(Cursor::new(data));
+        let result = deserializer.deserialize_value();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), UbjsonError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn test_strongly_typed_array_size_limit() {
+        // Strongly-typed array that exceeds size limit
+        let data = vec![
+            b'[',           // Array start
+            b'$',           // Type marker
+            b'i',           // Element type: int8
+            b'#',           // Count marker
+            b'U', 5,        // Count: 5 (exceeds limit of 3)
+            1, 2, 3, 4, 5,  // Elements
+            b']',           // Array end
+        ];
+        let mut deserializer = UbjsonDeserializer::with_limits(Cursor::new(data), 1000, 3);
+        let result = deserializer.deserialize_value();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), UbjsonError::SizeLimitExceeded(_)));
+    }
+
+    #[test]
+    fn test_strongly_typed_object_size_limit() {
+        // Strongly-typed object that exceeds size limit
+        let mut data = vec![
+            b'{',           // Object start
+            b'$',           // Type marker
+            b'i',           // Value type: int8
+            b'#',           // Count marker
+            b'U', 5,        // Count: 5 (exceeds limit of 3)
+        ];
+        
+        // Add 5 key-value pairs
+        for i in 0..5 {
+            data.push(b'S');
+            data.push(b'U');
+            data.push(1);
+            data.push(b'a' + i);
+            data.push(i + 1);
+        }
+        
+        data.push(b'}'); // Object end
+        
+        let mut deserializer = UbjsonDeserializer::with_limits(Cursor::new(data), 1000, 3);
+        let result = deserializer.deserialize_value();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), UbjsonError::SizeLimitExceeded(_)));
+    }
+
+
 
     #[test]
     fn test_unexpected_container_end() {
