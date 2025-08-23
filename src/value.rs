@@ -162,6 +162,28 @@ impl UbjsonValue {
         self.len().map_or(false, |len| len == 0)
     }
 
+    /// Get a human-readable type name for this value.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            UbjsonValue::Null => "null",
+            UbjsonValue::Bool(_) => "bool",
+            UbjsonValue::Int8(_) => "int8",
+            UbjsonValue::UInt8(_) => "uint8",
+            UbjsonValue::Int16(_) => "int16",
+            UbjsonValue::Int32(_) => "int32",
+            UbjsonValue::Int64(_) => "int64",
+            UbjsonValue::Float32(_) => "float32",
+            UbjsonValue::Float64(_) => "float64",
+            UbjsonValue::HighPrecision(_) => "high_precision",
+            UbjsonValue::Char(_) => "char",
+            UbjsonValue::String(_) => "string",
+            UbjsonValue::Array(_) => "array",
+            UbjsonValue::Object(_) => "object",
+            UbjsonValue::StronglyTypedArray { .. } => "strongly_typed_array",
+            UbjsonValue::StronglyTypedObject { .. } => "strongly_typed_object",
+        }
+    }
+
     /// Convert a boolean to UbjsonValue.
     pub fn from_bool(value: bool) -> Self {
         UbjsonValue::Bool(value)

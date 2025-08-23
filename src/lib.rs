@@ -35,6 +35,8 @@ pub mod deserializer;
 pub mod encoding;
 pub mod error;
 pub mod serializer;
+#[cfg(feature = "serde")]
+pub mod serde_impl;
 pub mod types;
 pub mod value;
 

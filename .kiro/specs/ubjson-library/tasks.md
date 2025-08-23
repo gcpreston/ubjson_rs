@@ -71,7 +71,7 @@
   - Write unit tests for error conditions and edge cases
   - _Requirements: 1.5, 2.4, 6.1, 6.2, 6.3, 6.4, 6.5_
 
-- [ ] 11. Implement serde integration
+- [x] 11. Implement serde integration
   - Create Serializer implementation for serde::Serializer trait
   - Implement Deserializer for serde::Deserializer trait
   - Add support for Rust's standard types through serde
