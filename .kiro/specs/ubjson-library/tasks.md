@@ -79,7 +79,7 @@
   - Write unit tests for serde integration with derive macros
   - _Requirements: 5.2, 5.4_
 
-- [ ] 12. Create high-level public API functions
+- [x] 12. Create high-level public API functions
   - Implement convenience functions: to_vec, to_writer, from_slice, from_reader
   - Add value-based serialization functions for UbjsonValue
   - Create builder pattern for configuring serialization options
