@@ -1,7 +1,7 @@
 [package]
 name = "ubjson-rs"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "A Rust library for reading and writing Universal Binary JSON (UBJSON) format"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/example/ubjson_rs"
