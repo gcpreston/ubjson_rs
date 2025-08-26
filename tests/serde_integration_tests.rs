@@ -153,6 +153,41 @@ mod serde_tests {
     }
 
     #[test]
+    fn test_serialize_deserialize_struct_optional_keys() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize)]
+        struct Event {
+            name: String,
+            location: Option<String>
+        }
+
+        let original_with_location = Event {
+            name: "Birthday party".to_string(),
+            location: Some("My house".to_string())
+        };
+
+        let original_without_location = Event {
+            name: "Going away party".to_string(),
+            location: None
+        };
+
+        let mut buffer_with_location = Vec::new();
+        let serializer_with_location = UbjsonSerializer::new(&mut buffer_with_location);
+        original_with_location.serialize(serializer_with_location).unwrap();
+        
+        let mut buffer_without_location = Vec::new();
+        let serializer_without_location = UbjsonSerializer::new(&mut buffer_without_location);
+        original_without_location.serialize(serializer_without_location).unwrap();
+
+        let deserializer_with_location = UbjsonDeserializer::new(buffer_with_location.as_slice());
+        let result_with_location: Event = Event::deserialize(deserializer_with_location).unwrap();
+        assert_eq!(result_with_location, original_with_location);
+
+        let deserializer_without_location = UbjsonDeserializer::new(buffer_without_location.as_slice());
+        let result_without_location: Event = Event::deserialize(deserializer_without_location).unwrap();
+        assert_eq!(result_without_location, original_without_location);
+    }
+
+    #[test]
     fn test_serialize_deserialize_nested_struct() {
         let original = Company {
             name: "Acme Corp".to_string(),
